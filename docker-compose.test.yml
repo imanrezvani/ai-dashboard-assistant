@@ -1,0 +1,21 @@
+# postgres ایزوله برای تست‌های integration (پورت 5433 تا با compose اصلی تداخل نکند)
+services:
+  postgres_test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tasmim
+      POSTGRES_PASSWORD: tasmim_secret
+      POSTGRES_DB: tasmim_yar_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./apps/api/init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasmim -d tasmim_yar_test"]
+      interval: 2s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+volumes:
+  pgdata_test:

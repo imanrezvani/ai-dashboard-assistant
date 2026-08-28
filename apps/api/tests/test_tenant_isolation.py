@@ -160,13 +160,17 @@ def test_cross_org_with_header_forbidden():
 
 
 def test_rls_force_enabled_in_code():
-    """پالیسی RLS باید با FORCE ROW LEVEL SECURITY فعال شده باشد"""
+    """پالیسی RLS باید با FORCE ROW LEVEL SECURITY و Fail-Closed باشد"""
     main_path = API_DIR / "app" / "main.py"
     content = main_path.read_text(encoding="utf-8")
     assert "FORCE ROW LEVEL SECURITY" in content, "main.py باید شامل FORCE ROW LEVEL SECURITY باشد"
     assert "ENABLE ROW LEVEL SECURITY" in content, "main.py باید شامل ENABLE ROW LEVEL SECURITY باشد"
     # اطمینان از وجود USING و WITH CHECK
     assert "USING" in content and "WITH CHECK" in content
+    # Fail-Closed: نباید IS NULL fallback داشته باشد
+    assert "IS NULL" not in content, "پالیسی باید Fail-Closed باشد (بدون IS NULL fallback)"
+    # باید دقیقا از current_setting با organization_id مقایسه کند
+    assert "organization_id::text = current_setting('app.current_org_id', true)" in content
 
 
 def test_set_local_in_middleware():
