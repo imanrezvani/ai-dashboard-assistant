@@ -12,19 +12,17 @@ from app.models.membership import Membership
 from app.models.user import User
 
 
-def set_rls_context(db: Session, organization_id: uuid.UUID) -> None:
+def set_rls_context(db: Session, organization_id: uuid.UUID, user_id: uuid.UUID | None = None) -> None:
     """در ابتدای هر request/تراکنش tenant_id تأییدشده را روی session ست می‌کند.
 
-    اجرای دقیق: `SET LOCAL app.current_org_id = '<tenant_id>'`
+    اجرای دقیق: `SET LOCAL app.current_org_id = '<tenant_id>'` + `SET LOCAL app.current_user_id`
     معادل SQLAlchemy:
         SELECT set_config('app.current_org_id', '<tenant_id>', true)
+        SELECT set_config('app.current_user_id', '<user_id>', true)
     پارامتر سوم `true` یعنی LOCAL (فقط همین تراکنش).
 
-    این تابع باید **بعد از تأیید عضویت** (require_membership) و **قبل از هر query بعدی**
-    روی همان Session/Transaction اجرا شود تا پالیسی RLS اعمال گردد.
-    برای dialectهای غیر-Postgres (مثلاً SQLite در تست) نادیده گرفته می‌شود.
-
-    محل فراخوانی: `app/middleware/tenant.py:88` داخل `require_membership`
+    برای memberships که نیاز به fallback user دارند، هر دو ست می‌شوند.
+    برای dialectهای غیر-Postgres (مثلاً SQLite) نادیده گرفته می‌شود.
     """
     try:
         bind = db.get_bind()
@@ -33,8 +31,25 @@ def set_rls_context(db: Session, organization_id: uuid.UUID) -> None:
     except Exception:
         pass
     try:
-        # معادل دقیق: SET LOCAL app.current_org_id = '<tenant_id>'
         db.execute(text("SELECT set_config('app.current_org_id', :org_id, true)"), {"org_id": str(organization_id)})
+        if user_id:
+            db.execute(text("SELECT set_config('app.current_user_id', :uid, true)"), {"uid": str(user_id)})
+    except Exception:
+        pass
+
+
+def set_user_context(db: Session, user_id: uuid.UUID) -> None:
+    """فقط user_id را ست می‌کند — برای لیست memberships قبل از داشتن org"""
+    try:
+        bind = db.get_bind()
+        if bind is not None and bind.dialect.name != "postgresql":
+            return
+    except Exception:
+        pass
+    try:
+        db.execute(text("SELECT set_config('app.current_user_id', :uid, true)"), {"uid": str(user_id)})
+        # org را خالی بگذار تا policy fallback کار کند
+        db.execute(text("SELECT set_config('app.current_org_id', '', true)"))
     except Exception:
         pass
 
@@ -82,15 +97,14 @@ def require_membership(
     db: Session,
     user: User,
 ) -> Membership:
-    """عضویت کاربر را تأیید کرده و سپس SET LOCAL را ست می‌کند.
+    """عضویت کاربر را تأیید کرده و SET LOCAL را ست می‌کند.
 
-    ترتیب اجرا در هر request محافظت‌شده:
-      1. get_current_user → احراز JWT
-      2. get_current_organization_id → استخراج tenant_id از X-Organization-Id / JWT
-      3. require_membership → چک membership در DB
-      4. set_rls_context → اجرای `SET LOCAL app.current_org_id = '<tenant_id>'` روی همان Session
-      5. اجرای queryهای بعدی (که تحت RLS فیلتر می‌شوند)
+    برای حل chicken-egg RLS روی memberships (که Fail-Closed است)،
+    ابتدا context را ست می‌کنیم تا query membership خود تحت RLS درست فیلتر شود.
+    سپس اگر membership یافت نشود، 403 برمی‌گردانیم.
     """
+    # ست کردن هر دو context قبل از query — تا memberships حتی با RLS دیده شود
+    set_rls_context(db, organization_id, user.id)
     membership = (
         db.query(Membership)
         .filter(Membership.user_id == user.id, Membership.organization_id == organization_id)
@@ -98,9 +112,6 @@ def require_membership(
     )
     if not membership:
         raise HTTPException(status_code=403, detail="دسترسی به این سازمان را ندارید")
-    # بعد از تأیید عضویت، بلافاصله و قبل از هر query بعدی SET LOCAL ست شود
-    # (معادل: SET LOCAL app.current_org_id = '<organization_id>')
-    set_rls_context(db, organization_id)
     return membership
 
 

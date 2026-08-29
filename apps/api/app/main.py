@@ -5,7 +5,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.models import *  # noqa: F401,F403 - ثبت مدل‌ها برای create_all
-from app.routers import auth, organizations
+from app.routers import auth, data_sources, organizations
 
 app = FastAPI(title="تصمیم‌یار API", version="0.1.0")
 
@@ -21,6 +21,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(organizations.router)
+app.include_router(data_sources.router)
 
 
 @app.on_event("startup")
@@ -44,20 +45,49 @@ def on_startup():
             except Exception:
                 pass
             # فعال‌سازی RLS روی جداول داده‌محور
-            for table in ["memberships"]:
+            # memberships: نیاز به fallback برای لیست سازمان‌ها (user_id = current_user وقتی org خالی است)
+            # data_sources/fact_rows: strict Fail-Closed (فقط org)
+            rls_tables = {
+                "memberships": """
+                    CREATE POLICY tenant_isolation ON memberships
+                    FOR ALL
+                    USING (
+                        organization_id::text = current_setting('app.current_org_id', true)
+                        OR (
+                            current_setting('app.current_org_id', true) = ''
+                            AND user_id::text = current_setting('app.current_user_id', true)
+                        )
+                    )
+                    WITH CHECK (
+                        organization_id::text = current_setting('app.current_org_id', true)
+                        OR (
+                            current_setting('app.current_org_id', true) = ''
+                            AND user_id::text = current_setting('app.current_user_id', true)
+                        )
+                    );
+                """,
+                "data_sources": """
+                    CREATE POLICY tenant_isolation ON data_sources
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
+                "fact_rows": """
+                    CREATE POLICY tenant_isolation ON fact_rows
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
+            }
+            for table, policy_sql in rls_tables.items():
                 conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;"))
                 conn.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;"))
                 # پالیسی Fail-Closed: اگر app.current_org_id ست نشده باشد،
                 # current_setting(..., true) رشته خالی '' برمی‌گرداند و مقایسه
                 # organization_id::text = '' همیشه false است → هیچ ردیفی برنمی‌گردد.
-                # این تضمین می‌کند حتی اگر اپ فیلتر را فراموش کند، DB جلوی نشت را می‌گیرد.
+                # بدون IS NULL fallback — برای memberships با fallback user
                 conn.execute(text(f"DROP POLICY IF EXISTS tenant_isolation ON {table};"))
-                conn.execute(text(f"""
-                    CREATE POLICY tenant_isolation ON {table}
-                    FOR ALL
-                    USING (organization_id::text = current_setting('app.current_org_id', true))
-                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
-                """))
+                conn.execute(text(policy_sql))
             # organizations و users سراسری هستند (بدون RLS) اما memberships محافظت می‌شود
     except Exception as e:
         print(f"[RLS] setup warning: {e}")

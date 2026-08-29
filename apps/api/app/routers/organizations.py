@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.middleware.tenant import get_current_organization_id, get_current_user, require_membership
+from app.middleware.tenant import get_current_organization_id, get_current_user, require_membership, set_user_context
 from app.models.membership import Membership, RoleEnum, ROLE_HIERARCHY
 from app.models.organization import Organization
 from app.models.user import User
@@ -37,6 +37,9 @@ def create_organization(payload: OrganizationCreate, user: User = Depends(get_cu
 
 @router.get("", response_model=list[OrganizationOut])
 def list_my_organizations(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # برای لیست memberships بدون org context، باید user_id را ست کنیم
+    # تا policy fallback memberships کار کند (user_id = current_user)
+    set_user_context(db, user.id)
     memberships = db.query(Membership).filter(Membership.user_id == user.id).all()
     org_ids = [m.organization_id for m in memberships]
     if not org_ids:

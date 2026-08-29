@@ -37,6 +37,7 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm">{me.user.full_name} ({me.user.email})</span>
+          <Link href="/data-sources"><Button variant="outline">منابع داده</Button></Link>
           <Link href="/settings"><Button variant="outline">تنظیمات سازمان</Button></Link>
           <Button variant="ghost" onClick={()=>{clearToken();router.push("/login")}}>خروج</Button>
         </div>
