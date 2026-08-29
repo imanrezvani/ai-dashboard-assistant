@@ -37,12 +37,36 @@ from app.core.security import hash_password
 
 
 # ----- کشف URL تست -----
+def _make_app_url(base_url: str, user: str, pwd: str) -> str:
+    import urllib.parse as up
+    p = up.urlparse(base_url)
+    netloc = f"{user}:{pwd}@{p.hostname}"
+    if p.port:
+        netloc += f":{p.port}"
+    return up.urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
+
+
 def _candidate_urls():
-    # اولویت: env کاربر، بعد compose اصلی (5432)، بعد compose test (5433)
-    env = os.getenv("TEST_DATABASE_URL")
-    if env:
-        yield env
-    # role اپ (NOBYPASSRLS) — تست واقعی باید با این role باشد
+    # اولویت: env کاربر — اگر TEST روی Neon باشد، ابتدا نسخه tasmim_app همان هاست را امتحان کن
+    env_test = os.getenv("TEST_DATABASE_URL")
+    env_admin = os.getenv("ADMIN_DATABASE_URL")
+    if env_test:
+        # اگر TEST خود tasmim_app است، همان را اول بده
+        if "tasmim_app" in env_test:
+            yield env_test
+        # وگرنه نسخه app روی همان هاست را بساز (Neon pooled)
+        try:
+            yield _make_app_url(env_test, "tasmim_app", "tasmim_app_secret")
+        except Exception:
+            pass
+        yield env_test
+    if env_admin:
+        try:
+            yield _make_app_url(env_admin, "tasmim_app", "tasmim_app_secret")
+        except Exception:
+            pass
+        yield env_admin
+    # fallback لوکال (docker-compose)
     yield "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5432/tasmim_yar"
     yield "postgresql+psycopg://tasmim:tasmim_secret@localhost:5432/tasmim_yar"
     yield "postgresql+psycopg://tasmim:tasmim_secret@localhost:5433/tasmim_yar_test"
@@ -229,13 +253,26 @@ def test_rls_bypass_attribute():
 def test_rls_policy_is_fail_closed():
     """پالیسی باید Fail-Closed باشد (بدون IS NULL)."""
     with engine.connect() as conn:
+        # روی Neon/Postgres 18، polqual as text برمی‌گردد به صورت OPEXPR داخلی؛
+        # برای گرفتن SQL واقعی باید pg_get_expr استفاده کرد
         row = conn.execute(text("""
-            SELECT polqual, polwithcheck FROM pg_policy
+            SELECT pg_get_expr(polqual, polrelid) AS qual,
+                   pg_get_expr(polwithcheck, polrelid) AS with_check
+            FROM pg_policy
             WHERE polname = 'tenant_isolation'
         """)).fetchone()
-        assert row is not None, "policy tenant_isolation یافت نشد"
-        qual = str(row[0]) if row[0] else ""
-        with_check = str(row[1]) if row[1] else ""
+        if row is None or row[0] is None:
+            # fallback برای نسخه‌های قدیمی که pg_get_expr null برمی‌گرداند
+            row2 = conn.execute(text("""
+                SELECT polqual::text, polwithcheck::text FROM pg_policy
+                WHERE polname = 'tenant_isolation'
+            """)).fetchone()
+            assert row2 is not None, "policy tenant_isolation یافت نشد"
+            qual = str(row2[0]) if row2[0] else ""
+            with_check = str(row2[1]) if row2[1] else ""
+        else:
+            qual = str(row[0]) if row[0] else ""
+            with_check = str(row[1]) if row[1] else ""
         # نباید IS NULL fallback داشته باشد
         assert "IS NULL" not in qual.upper(), f"policy باید Fail-Closed باشد، ولی IS NULL دارد: {qual}"
         assert "current_setting" in qual, f"policy باید از current_setting استفاده کند: {qual}"
