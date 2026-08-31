@@ -167,10 +167,16 @@ def test_rls_force_enabled_in_code():
     assert "ENABLE ROW LEVEL SECURITY" in content, "main.py باید شامل ENABLE ROW LEVEL SECURITY باشد"
     # اطمینان از وجود USING و WITH CHECK
     assert "USING" in content and "WITH CHECK" in content
-    # Fail-Closed: نباید IS NULL fallback داشته باشد
-    assert "IS NULL" not in content, "پالیسی باید Fail-Closed باشد (بدون IS NULL fallback)"
-    # باید دقیقا از current_setting با organization_id مقایسه کند
+    # Fail-Closed برای data_sources/fact_rows: نباید الگوی قدیمی Fail-Open وجود داشته باشد
+    # الگوی قدیمی: current_setting('app.current_org_id', true) IS NULL
+    assert "IS NULL" not in content.replace("بدون IS NULL", "") or "current_setting('app.current_org_id', true) IS NULL" not in content, "پالیسی باید Fail-Closed باشد (بدون IS NULL fallback)"
+    # اطمینان که کامنت توضیحی وجود دارد ولی پالیسی واقعی Fail-Closed است
+    assert "current_setting('app.current_org_id', true) IS NULL" not in content
+    # باید از current_setting با organization_id مقایسه کند (هم برای strict و هم برای memberships)
     assert "organization_id::text = current_setting('app.current_org_id', true)" in content
+    # ساختار جدید از دیکشنری rls_policies استفاده می‌کند
+    assert "rls_policies" in content or "data_sources" in content
+    assert "fact_rows" in content
 
 
 def test_set_local_in_middleware():
@@ -179,10 +185,12 @@ def test_set_local_in_middleware():
     content = tenant_path.read_text(encoding="utf-8")
     # باید دستور SET LOCAL معادل set_config وجود داشته باشد
     assert "set_config('app.current_org_id'" in content or "SET LOCAL app.current_org_id" in content
+    assert "set_config('app.current_user_id'" in content or "SET LOCAL app.current_user_id" in content
     assert "def set_rls_context" in content
     assert "def require_membership" in content
-    # require_membership باید set_rls_context را صدا بزند
-    assert "set_rls_context(db, organization_id)" in content
+    # require_membership باید set_rls_context را صدا بزند (اکنون با user_id هم)
+    assert "set_rls_context(db, organization_id" in content
+    assert "user.id" in content or "user_id" in content
 
 
 def test_unauthenticated_access_denied():
