@@ -28,6 +28,9 @@ from app.models.data_source import DataSource
 from app.models.fact_row import FactRow
 from app.main import app
 
+# رمز tasmim_app از env خوانده می‌شود، نه hardcode تکراری
+TASMIM_APP_PASSWORD = os.getenv("TASMIM_APP_DB_PASSWORD", "tasmim_app_secret_dev_only")
+
 
 def _make_app_url(base_url: str, user: str, pwd: str) -> str:
     import urllib.parse as up
@@ -46,17 +49,17 @@ def _candidate_urls():
         if "tasmim_app" in env_test:
             yield env_test
         try:
-            yield _make_app_url(env_test, "tasmim_app", "tasmim_app_secret")
+            yield _make_app_url(env_test, "tasmim_app", TASMIM_APP_PASSWORD)
         except Exception:
             pass
         yield env_test
     if env_admin:
         try:
-            yield _make_app_url(env_admin, "tasmim_app", "tasmim_app_secret")
+            yield _make_app_url(env_admin, "tasmim_app", TASMIM_APP_PASSWORD)
         except Exception:
             pass
         yield env_admin
-    yield "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5432/tasmim_yar"
+    yield f"postgresql+psycopg://tasmim_app:{TASMIM_APP_PASSWORD}@localhost:5432/tasmim_yar"
     yield "postgresql+psycopg://tasmim:tasmim_secret@localhost:5432/tasmim_yar"
 
 
@@ -91,7 +94,7 @@ if not is_app_user:
     except Exception as e:
         print(f"[grant warn] {e}")
     # try switch to app user
-    for candidate in [_make_app_url(used_url, "tasmim_app", "tasmim_app_secret")] if "localhost" in used_url else []:
+    for candidate in [_make_app_url(used_url, "tasmim_app", TASMIM_APP_PASSWORD)] if "localhost" in used_url else []:
         try:
             ae = create_engine(candidate)
             with ae.connect() as c:
@@ -111,7 +114,7 @@ if not is_app_user and ("neon.tech" in used_url or os.getenv("TEST_DATABASE_URL"
         if not base:
             continue
         try:
-            app_url = _make_app_url(base, "tasmim_app", "tasmim_app_secret")
+            app_url = _make_app_url(base, "tasmim_app", TASMIM_APP_PASSWORD)
             ae = create_engine(app_url)
             with ae.connect() as c:
                 c.execute(text("SELECT 1"))

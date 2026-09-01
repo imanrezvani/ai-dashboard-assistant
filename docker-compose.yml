@@ -3,8 +3,9 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: tasmim
-      POSTGRES_PASSWORD: tasmim_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasmim_secret}
       POSTGRES_DB: tasmim_yar
+      TASMIM_APP_DB_PASSWORD: ${TASMIM_APP_DB_PASSWORD:-tasmim_app_secret_dev_only}
     ports:
       - "5432:5432"
     volumes:
@@ -24,8 +25,10 @@ services:
       # تا FORCE ROW LEVEL SECURITY حتی برای owner هم اعمال شود.
       # superuser (tasmim) حتی با FORCE از RLS معاف است.
       # اگر DEV_DATABASE_URL ست شده باشد (Neon dev)، از آن استفاده می‌شود، وگرنه fallback لوکال
-      DATABASE_URL: ${DEV_DATABASE_URL:-postgresql+psycopg://tasmim_app:tasmim_app_secret@postgres:5432/tasmim_yar}
-      JWT_SECRET: change-me-super-secret-jwt-key
+      # TASMIM_APP_DB_PASSWORD برای ساخت DATABASE_URL لوکال استفاده می‌شود (در production از DEV_DATABASE_URL استفاده کن)
+      DATABASE_URL: ${DEV_DATABASE_URL:-postgresql+psycopg://tasmim_app:${TASMIM_APP_DB_PASSWORD:-tasmim_app_secret_dev_only}@postgres:5432/tasmim_yar}
+      TASMIM_APP_DB_PASSWORD: ${TASMIM_APP_DB_PASSWORD:-tasmim_app_secret_dev_only}
+      JWT_SECRET: ${JWT_SECRET:-change-me-super-secret-jwt-key-dev-only}
       JWT_EXPIRE_MINUTES: "1440"
       CORS_ORIGINS: http://localhost:3000
     ports:

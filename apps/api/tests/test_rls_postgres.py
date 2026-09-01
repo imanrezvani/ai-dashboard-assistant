@@ -14,7 +14,7 @@
   docker compose -f docker-compose.test.yml up -d
   TEST_DATABASE_URL=postgresql+psycopg://tasmim:tasmim_secret@localhost:5433/tasmim_yar_test pytest -v
 یا
-  TEST_DATABASE_URL=postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5432/tasmim_yar pytest -v
+  TASMIM_APP_DB_PASSWORD=... TEST_DATABASE_URL=postgresql+psycopg://tasmim_app:${TASMIM_APP_DB_PASSWORD}@localhost:5432/tasmim_yar pytest -v
 """
 
 import os
@@ -25,6 +25,9 @@ import sys
 API_DIR = pathlib.Path(__file__).resolve().parents[1]
 if str(API_DIR) not in sys.path:
     sys.path.insert(0, str(API_DIR))
+
+# رمز tasmim_app از env خوانده می‌شود، نه hardcode تکراری
+TASMIM_APP_PASSWORD = os.getenv("TASMIM_APP_DB_PASSWORD", "tasmim_app_secret_dev_only")
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -56,21 +59,21 @@ def _candidate_urls():
             yield env_test
         # وگرنه نسخه app روی همان هاست را بساز (Neon pooled)
         try:
-            yield _make_app_url(env_test, "tasmim_app", "tasmim_app_secret")
+            yield _make_app_url(env_test, "tasmim_app", TASMIM_APP_PASSWORD)
         except Exception:
             pass
         yield env_test
     if env_admin:
         try:
-            yield _make_app_url(env_admin, "tasmim_app", "tasmim_app_secret")
+            yield _make_app_url(env_admin, "tasmim_app", TASMIM_APP_PASSWORD)
         except Exception:
             pass
         yield env_admin
     # fallback لوکال (docker-compose)
-    yield "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5432/tasmim_yar"
+    yield f"postgresql+psycopg://tasmim_app:{TASMIM_APP_PASSWORD}@localhost:5432/tasmim_yar"
     yield "postgresql+psycopg://tasmim:tasmim_secret@localhost:5432/tasmim_yar"
     yield "postgresql+psycopg://tasmim:tasmim_secret@localhost:5433/tasmim_yar_test"
-    yield "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5433/tasmim_yar_test"
+    yield f"postgresql+psycopg://tasmim_app:{TASMIM_APP_PASSWORD}@localhost:5433/tasmim_yar_test"
 
 
 def _get_test_engine():
@@ -123,10 +126,10 @@ with engine.begin() as conn:
 if not is_app_user:
     # سعی کن با app_user وصل شوی؛ اگر نشد، تست را با هشدار روی superuser اجرا کن
     # اما نتیجه روی superuser قابل اعتماد نیست (همه ردیف‌ها برمی‌گردد)
-    app_url = "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5432/tasmim_yar"
+    app_url = f"postgresql+psycopg://tasmim_app:{TASMIM_APP_PASSWORD}@localhost:5432/tasmim_yar"
     # اگر تست روی 5433 است، app_url متناظر
     if "5433" in used_url:
-        app_url = "postgresql+psycopg://tasmim_app:tasmim_app_secret@localhost:5433/tasmim_yar_test"
+        app_url = f"postgresql+psycopg://tasmim_app:{TASMIM_APP_PASSWORD}@localhost:5433/tasmim_yar_test"
     try:
         app_engine = create_engine(app_url, pool_pre_ping=True)
         with app_engine.connect() as c:

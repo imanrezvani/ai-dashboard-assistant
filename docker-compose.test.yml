@@ -4,8 +4,9 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: tasmim
-      POSTGRES_PASSWORD: tasmim_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasmim_secret}
       POSTGRES_DB: tasmim_yar_test
+      TASMIM_APP_DB_PASSWORD: ${TASMIM_APP_DB_PASSWORD:-tasmim_app_secret_dev_only}
     ports:
       - "5433:5432"
     volumes:
