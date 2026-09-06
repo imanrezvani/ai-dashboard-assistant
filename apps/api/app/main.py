@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import Base, engine
-from app.models import *  # noqa: F401,F403 - ثبت مدل‌ها برای create_all
+from app.core.database import engine
+from app.core.migrations import run_startup_migrations
+from app.models import *  # noqa: F401,F403 - ثبت مدل‌ها روی Base.metadata (برای Alembic)
 from app.routers import auth, data_sources, organizations
 
 app = FastAPI(title="تصمیم‌یار API", version="0.1.0")
@@ -26,8 +27,11 @@ app.include_router(data_sources.router)
 
 @app.on_event("startup")
 def on_startup():
-    # ایجاد جداول اگر وجود نداشته باشند
-    Base.metadata.create_all(bind=engine)
+    # ایجاد/به‌روزرسانی schema با Alembic (فاز ۲.۰) — جایگزین Base.metadata.create_all
+    # (stamp/upgrade با قفل مشورتی؛ در dialect غیر-PostgreSQL مثل SQLite no-op است)
+    # NOTE: مدل‌ها هنوز باید در این فایل import شده باشند تا metadata کامل باشد —
+    # import * زیر همین کار را انجام می‌دهد؛ اگر روزی حذف شد، برای autogenerate در env.py نگه دارید.
+    run_startup_migrations(engine)
     # فعال‌سازی RLS با FORCE (بدون FORCE، owner دیتابیس از policy معاف است)
     # توجه: superuser همیشه BYPASSRLS دارد و حتی FORCE را دور می‌زند؛
     # به همین دلیل اپ باید با role غیر-superuser (tasmim_app NOBYPASSRLS) وصل شود —

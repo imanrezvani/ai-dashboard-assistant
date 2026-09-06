@@ -18,17 +18,20 @@
 
 ## فاز فعلی
 
-- فاز ۱ **تکمیل‌شده** است؛ هیچ فاز بعدی شروع نشده (هیچ کد KPI یا دستیار AI در ریپو وجود ندارد).
-- درخت کاری: یک fix تأییدشده در `apps/api/app/core/config.py` (bug مقدار خالی `DATABASE_URL`) هنوز commit نشده است.
+**فاز ۲.۰ — baseline Alembic — تکمیل‌شده:**
+- `apps/api/alembic.ini` + `apps/api/alembic/env.py` (URL از همان زنجیره settings اپ؛ offline `--sql`، CLI و حالت in-process) + `script.py.mako`
+- baseline migration: `alembic/versions/20260906_0001_baseline.py` — دقیقاً schema فاز ۱ (۵ جدول: organizations, users, memberships, data_sources, fact_rows) بدون هیچ جدول جدید و بدون پالیسی RLS (طبق محدودیت؛ RLS همچنان در runtime در `app/main.py` اعمال می‌شود)
+- `app/core/migrations.py`: اجرای migration در startup با `pg_advisory_xact_lock` (جلوگیری از migrate همزمان چند instance)؛ در dialect غیر-PostgreSQL (تست‌های SQLite) no-op
+- `Base.metadata.create_all` از startup حذف شد؛ منطق: دیتابیس تازه → `upgrade head`، دیتابیس موجود فاز ۱ (بدون `alembic_version`) → `stamp head`
+- رفتار API تغییر نکرده؛ هر ۷ تست API همان پاس‌های قبلی را دارند
 
 ## گام‌های بعدی (طبق «مرحله بعد» در README)
 
-1. **داشبورد KPI** — تجمیع/نمایش `fact_rows`
-2. **دستیار هوش مصنوعی**
+فاز ۲ (بقیه): ۱) ماندگاری فایل آپلودی + schema ستون‌ها (حذف `PENDING_UPLOADS` حافظه‌ای) ۲) اتصال دیتابیس خارجی ۳) موتور KPI ۴) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
 ## بدهی فنی شناخته‌شده
 
-- **مایگریشن دیتابیس وجود ندارد:** `alembic==1.14.1` در requirements هست ولی هیچ `alembic.ini`/پوشه migrations وجود ندارد؛ schema فقط با `Base.metadata.create_all` در startup (`app/main.py`) ساخته می‌شود → هر تغییر schema آینده نیازمند راه‌اندازی Alembic است.
+- **مایگریشن دیتابیس:** تا فاز ۱ schema فقط با `create_all` ساخته می‌شد — از فاز ۲.۰ با Alembic مدیریت می‌شود (baseline: `0001_baseline`). تغییرات schema آینده فقط با migration جدید.
 - **CI وجود ندارد** (پوشه `.github/` نیست)؛ تست‌ها فقط به‌صورت محلی اجرا می‌شوند.
 - **پیکربندی pytest وجود ندارد** (`conftest.py`/`pytest.ini`/`pyproject.toml` نیست)؛ path و env توسط خود فایل‌های تست ست می‌شود.
 - تست‌های integration بدون PostgreSQL در دسترس skip می‌شوند؛ اجرای کامل نیاز به `docker compose -f docker-compose.test.yml up -d` دارد.
