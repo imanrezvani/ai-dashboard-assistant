@@ -177,6 +177,9 @@ def test_rls_force_enabled_in_code():
     # ساختار جدید از دیکشنری rls_policies استفاده می‌کند
     assert "rls_policies" in content or "data_sources" in content
     assert "fact_rows" in content
+    # فاز ۲.۱: جدول‌های جدید هم باید در rls_tables با همان پالیسی Fail-Closed باشند
+    assert "data_source_files" in content, "main.py باید RLS برای data_source_files اعلام کند"
+    assert "data_source_columns" in content, "main.py باید RLS برای data_source_columns اعلام کند"
 
 
 def test_set_local_in_middleware():

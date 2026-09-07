@@ -23,8 +23,12 @@ from fastapi.testclient import TestClient
 from app.core.database import Base, get_db
 import app.core.database as db_module
 from app.core.security import create_access_token, hash_password
+from app.core.storage import FileNotFound
+from app.routers.data_sources import file_storage
 from app.models import Membership, Organization, RoleEnum, User
 from app.models.data_source import DataSource
+from app.models.data_source_column import DataSourceColumn
+from app.models.data_source_file import DataSourceFile
 from app.models.fact_row import FactRow
 from app.main import app
 
@@ -157,6 +161,16 @@ with engine.begin() as conn:
             FOR ALL USING (organization_id::text = current_setting('app.current_org_id', true))
             WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
         """,
+        "data_source_files": """
+            CREATE POLICY tenant_isolation ON data_source_files
+            FOR ALL USING (organization_id::text = current_setting('app.current_org_id', true))
+            WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+        """,
+        "data_source_columns": """
+            CREATE POLICY tenant_isolation ON data_source_columns
+            FOR ALL USING (organization_id::text = current_setting('app.current_org_id', true))
+            WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+        """,
     }
     for table, policy_sql in rls_policies.items():
         conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
@@ -268,6 +282,14 @@ with seed_engine.begin() as conn:
     except Exception:
         pass
     try:
+        conn.execute(text("DELETE FROM data_source_files"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("DELETE FROM data_source_columns"))
+    except Exception:
+        pass
+    try:
         conn.execute(text("DELETE FROM data_sources"))
     except Exception:
         pass
@@ -313,6 +335,29 @@ def test_upload_preview_and_map():
     assert data["row_count"] == 3
     ds_id = data["id"]
 
+    # فاز ۲.۱: فایل و متادیتای ستون‌ها باید ماندگار شده باشند (bytea + data_source_columns)
+    csv_bytes = CSV_CONTENT.encode()
+    with SessionLocal() as db:
+        db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_a.id)})
+        frow = db.query(DataSourceFile).filter(DataSourceFile.data_source_id == uuid.UUID(ds_id)).one()
+        assert frow.organization_id == org_a.id
+        assert frow.content == csv_bytes, "بایت‌های فایل باید عیناً ماندگار شده باشند"
+        assert frow.size_bytes == len(csv_bytes)
+        assert frow.content_type == "text/csv"
+        cols = (
+            db.query(DataSourceColumn)
+            .filter(DataSourceColumn.data_source_id == uuid.UUID(ds_id))
+            .order_by(DataSourceColumn.position)
+            .all()
+        )
+        assert [c.name for c in cols] == ["date", "category", "amount", "label"]
+        assert [c.position for c in cols] == [0, 1, 2, 3]
+        assert [c.dtype for c in cols] == ["object", "object", "float64", "object"]
+        assert all(c.mapped_role is None for c in cols), "قبل از map هیچ نقشی ثبت نشده باشد"
+        # لایه FileStorage باید همین بایت‌های ماندگار را برگرداند
+        assert file_storage.load(db, data_source_id=uuid.UUID(ds_id), organization_id=org_a.id) == csv_bytes
+        db.rollback()
+
     # map
     map_payload = {"measure_column": "amount", "date_column": "date", "category_column": "category", "label_column": "label"}
     resp2 = client.post(f"/data-sources/{ds_id}/map", json=map_payload, headers={"Authorization": f"Bearer {token_a}", "X-Organization-Id": str(org_a.id)})
@@ -341,6 +386,17 @@ def test_upload_preview_and_map():
         facts_empty = db.query(FactRow).all()
         assert len(facts_empty) == 0
         db.rollback()
+
+    # فاز ۲.۱: نقش‌های map شده باید روی متادیتای ستون‌ها ماندگار باشند
+    with SessionLocal() as db:
+        db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_a.id)})
+        roles = {
+            c.name: c.mapped_role
+            for c in db.query(DataSourceColumn).filter(DataSourceColumn.data_source_id == uuid.UUID(ds_id)).all()
+        }
+        assert roles == {"date": "date", "category": "category", "amount": "measure", "label": "label"}
+        db.rollback()
+
 
 def test_cross_org_cannot_access_data_sources():
     """کاربر Org B نباید به data_sources/fact_rows Org A دسترسی داشته باشد"""
@@ -379,6 +435,41 @@ def test_cross_org_cannot_access_data_sources():
         assert len(facts_a) == 3
         db.rollback()
 
+def test_map_loads_persisted_file_not_process_memory():
+    """اگر نسخه ماندگار (bytea) تغییر کند، map باید از آن بخواند — نه از حافظه پروسه.
+
+    PENDING_UPLOADS حذف شده؛ تنها مسیر معتبر، data_source_files در DB است.
+    با عوض‌کردن محتوای ماندگار بین upload و map، خروجی map باید مطابق نسخه
+    ماندگار باشد — در غیر این صورت یعنی map از state حافظه‌ای می‌خواند.
+    """
+    files = {"file": ("persist.csv", io.BytesIO(CSV_CONTENT.encode()), "text/csv")}
+    resp = client.post("/data-sources/upload", files=files, headers={"Authorization": f"Bearer {token_a}", "X-Organization-Id": str(org_a.id)})
+    assert resp.status_code == 200, f"upload failed {resp.status_code}: {resp.text}"
+    ds_id = resp.json()["id"]
+
+    # شبیه‌سازی restart: محتوای ماندگار را مستقیم در DB عوض می‌کنیم
+    modified = "date,category,amount,label\n2024-04-01,Food,999.0,Changed\n"
+    with seed_engine.begin() as conn:
+        conn.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_a.id)})
+        conn.execute(
+            text("UPDATE data_source_files SET content = :c, size_bytes = :s WHERE data_source_id = :ds"),
+            {"c": modified.encode(), "s": len(modified.encode()), "ds": ds_id},
+        )
+
+    resp2 = client.post(
+        f"/data-sources/{ds_id}/map",
+        json={"measure_column": "amount", "date_column": "date", "category_column": "category", "label_column": "label"},
+        headers={"Authorization": f"Bearer {token_a}", "X-Organization-Id": str(org_a.id)},
+    )
+    assert resp2.status_code == 200, f"map failed {resp2.status_code}: {resp2.text}"
+    assert resp2.json()["inserted_rows"] == 1
+
+    resp3 = client.get(f"/data-sources/{ds_id}/rows", headers={"Authorization": f"Bearer {token_a}", "X-Organization-Id": str(org_a.id)})
+    assert resp3.status_code == 200
+    amounts = [r["measure_value"] for r in resp3.json()]
+    assert amounts == [999.0], f"map باید از فایل ماندگار بخواند (999.0)، نه حافظه پروسه: {amounts}"
+
+
 def test_excel_upload_preview():
     """تأیید آپلود Excel هم کار می‌کند"""
     # create simple excel in memory
@@ -393,12 +484,38 @@ def test_excel_upload_preview():
     assert resp.json()["file_type"] == "xlsx"
     assert len(resp.json()["preview"]) == 2
 
+def test_new_tables_tenant_isolation():
+    """data_source_files / data_source_columns باید tenant-isolated باشند:
+    در سطح RLS (org B هیچ ردیفی نمی‌بیند) و در سطح لایه storage
+    (load با org دیگر → FileNotFound، نه نشت داده)."""
+    with SessionLocal() as db:
+        # به‌عنوان org A: ردیف‌های خودش با organization_id درست دیده می‌شود
+        db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_a.id)})
+        ds_a = db.query(DataSource).first()
+        assert ds_a is not None, "org A باید حداقل یک data_source داشته باشد (از تست‌های upload)"
+        ds_id_a = ds_a.id
+        files_a = db.query(DataSourceFile).all()
+        assert len(files_a) >= 1
+        assert all(str(f.organization_id) == str(org_a.id) for f in files_a)
+        assert all(str(c.organization_id) == str(org_a.id) for c in db.query(DataSourceColumn).all())
+        db.rollback()
+
+        # به‌عنوان org B: fail-closed — هیچ ردیفی از جدول‌های جدید دیده نمی‌شود
+        db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_b.id)})
+        assert db.query(DataSourceFile).count() == 0, "org B نباید data_source_files ببیند"
+        assert db.query(DataSourceColumn).count() == 0, "org B نباید data_source_columns ببیند"
+        # لایه storage (defense-in-depth کنار RLS) هم نباید فایل org دیگر را برگرداند
+        with pytest.raises(FileNotFound):
+            file_storage.load(db, data_source_id=ds_id_a, organization_id=org_b.id)
+        db.rollback()
+
+
 def test_rls_policy_exists_for_new_tables():
-    """پالیسی‌های جدید باید Fail-Closed و FORCE باشند"""
+    """پالیسی‌های RLS جداول داده‌ای باید Fail-Closed، org-scoped و ENABLE + FORCE باشند"""
     # use admin engine to inspect pg_policy (bypass RLS)
     eng = seed_engine
     with eng.connect() as conn:
-        for tbl in ["data_sources", "fact_rows"]:
+        for tbl in ["data_sources", "fact_rows", "data_source_files", "data_source_columns"]:
             row = conn.execute(text(f"SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname='tenant_isolation' AND polrelid='{tbl}'::regclass")).fetchone()
             # fallback if not found via pg_get_expr, try polqual::text
             if not row or not row[0]:
@@ -407,5 +524,8 @@ def test_rls_policy_exists_for_new_tables():
             qual = str(row[0])
             assert "IS NULL" not in qual.upper(), f"{tbl} policy should be Fail-Closed, got {qual}"
             assert "current_setting" in qual, f"{tbl} policy missing current_setting"
+            assert "organization_id" in qual, f"{tbl} policy should be organization-scoped, got {qual}"
+            enabled = conn.execute(text(f"SELECT relrowsecurity FROM pg_class WHERE relname='{tbl}'")).fetchone()
+            assert enabled and enabled[0] is True, f"{tbl} should have RLS ENABLED"
             force = conn.execute(text(f"SELECT relforcerowsecurity FROM pg_class WHERE relname='{tbl}'")).fetchone()
             assert force and force[0] is True, f"{tbl} should have FORCE RLS"
