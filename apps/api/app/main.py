@@ -50,7 +50,7 @@ def on_startup():
                 pass
             # فعال‌سازی RLS روی جداول داده‌محور
             # memberships: نیاز به fallback برای لیست سازمان‌ها (user_id = current_user وقتی org خالی است)
-            # data_sources/fact_rows: strict Fail-Closed (فقط org)
+            # data_sources/fact_rows/data_source_files/data_source_columns: strict Fail-Closed (فقط org)
             rls_tables = {
                 "memberships": """
                     CREATE POLICY tenant_isolation ON memberships
@@ -78,6 +78,19 @@ def on_startup():
                 """,
                 "fact_rows": """
                     CREATE POLICY tenant_isolation ON fact_rows
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
+                # فاز ۲.۱: فایل‌های آپلودی (bytea) و متادیتای ستون‌ها هم تحت همان ایزولاسیون سخت‌گیرانه
+                "data_source_files": """
+                    CREATE POLICY tenant_isolation ON data_source_files
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
+                "data_source_columns": """
+                    CREATE POLICY tenant_isolation ON data_source_columns
                     FOR ALL
                     USING (organization_id::text = current_setting('app.current_org_id', true))
                     WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));

@@ -7,8 +7,8 @@
     no-op است تا رفتار فعلی تست‌ها بدون تغییر بماند.
   - `pg_advisory_xact_lock` جلوی migrate همزمان توسط چند instance را می‌گیرد
     (قفل تراکنشی — با پایان تراکنش آزاد می‌شود).
-  - دیتابیس تازه (بدون هیچ جدولی)          → upgrade head (اعمال baseline)
-  - دیتابیس موجود فاز ۱ (جداول هست، alembic_version نیست) → stamp head
+  - دیتابیس تازه (بدون هیچ جدولی)          → upgrade head (اعمال همه migrationها)
+  - دیتابیس موجود فاز ۱ (جداول هست، alembic_version نیست) → stamp 0001_baseline → upgrade head
   - دیتابیس stamp شده                       → upgrade head
 
 خطای migration اپ را بالا نمی‌آید بی‌صدا رها کند: استثنا propagate می‌شود —
@@ -53,10 +53,15 @@ def run_startup_migrations(engine: Engine) -> None:
 
         if not has_version_table:
             if has_phase1_schema:
-                logger.info("[migrations] دیتابیس موجود بدون alembic_version → stamp baseline")
-                command.stamp(cfg, "head")
+                # دیتابیس موجود فاز ۱: اول stamp روی baseline (نه head) تا بعد از آن
+                # migrationهای جدید (مثل 0002_persist_uploads) حتماً اجرا شوند و
+                # جدول‌های جدید از قلم نیفتند.
+                logger.info("[migrations] دیتابیس موجود بدون alembic_version → stamp 0001_baseline")
+                command.stamp(cfg, "0001_baseline")
+                logger.info("[migrations] اعمال migrationهای بعد از baseline")
+                command.upgrade(cfg, "head")
             else:
-                logger.info("[migrations] دیتابیس تازه → اعمال baseline")
+                logger.info("[migrations] دیتابیس تازه → اعمال همه migrationها (head)")
                 command.upgrade(cfg, "head")
         else:
             logger.info("[migrations] اجرای upgrade head")

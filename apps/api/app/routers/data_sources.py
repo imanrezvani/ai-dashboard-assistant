@@ -5,20 +5,32 @@ from datetime import datetime
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
-from sqlalchemy import text
 
 from app.core.database import get_db
+from app.core.storage import FileNotFound, FileStorage
+from app.core.storage_postgres import PostgresFileStorage
 from app.middleware.tenant import get_current_organization_id, get_current_user, require_membership
 from app.models.data_source import DataSource
+from app.models.data_source_column import DataSourceColumn
 from app.models.fact_row import FactRow
 from app.models.user import User
 from app.schemas.data_source import DataSourceOut, MapRequest, MapResponse, UploadPreviewResponse
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
-# حافظه موقت برای فایل‌های آپلود شده تا مرحله Map
-# در محیط production باید از storage دائمی (S3/DB) استفاده کرد
-PENDING_UPLOADS: dict[uuid.UUID, pd.DataFrame] = {}
+# storage ماندگار (فاز ۲.۱) — جایگزین PENDING_UPLOADS حافظه‌ای
+# فایل به‌صورت bytea در data_source_files ذخیره می‌شود؛ پس از restart هم در دسترس است.
+file_storage: FileStorage = PostgresFileStorage()
+
+MAX_ROWS = 10000
+PREVIEW_ROWS = 10
+
+
+def _infer_dtype(dtype) -> str | None:
+    """نوع ستون pandas به رشته کوتاه قابل ذخیره."""
+    if dtype is None:
+        return None
+    return str(dtype)
 
 
 def _parse_file(filename: str, content: bytes) -> pd.DataFrame:
@@ -35,6 +47,26 @@ def _parse_file(filename: str, content: bytes) -> pd.DataFrame:
             raise HTTPException(status_code=400, detail=f"خطا در پارس Excel: {e}")
     else:
         raise HTTPException(status_code=400, detail="فرمت فایل باید CSV یا Excel باشد")
+
+
+def _persist_columns(db: Session, *, data_source_id: uuid.UUID, organization_id: uuid.UUID, df: pd.DataFrame) -> None:
+    """متادیتای ستون‌ها را در data_source_columns ماندگار می‌کند (جایگزین اتکا به حافظه)."""
+    for position, name in enumerate(df.columns.astype(str)):
+        db.add(
+            DataSourceColumn(
+                data_source_id=data_source_id,
+                organization_id=organization_id,
+                name=name,
+                position=position,
+                dtype=_infer_dtype(df[name].dtype),
+            )
+        )
+
+
+def _load_dataframe(db: Session, *, ds: DataSource, organization_id: uuid.UUID) -> pd.DataFrame:
+    """بازیابی DataFrame از storage ماندگار (bytea → parse)."""
+    content = file_storage.load(db, data_source_id=ds.id, organization_id=organization_id)
+    return _parse_file(ds.name, content)
 
 
 @router.post("/upload", response_model=UploadPreviewResponse)
@@ -60,7 +92,7 @@ def upload_data_source(
         raise HTTPException(status_code=400, detail="فایل هیچ ردیفی ندارد")
 
     # محدودیت ساده: حداکثر 10000 ردیف برای جلوگیری از overload
-    if len(df) > 10000:
+    if len(df) > MAX_ROWS:
         raise HTTPException(status_code=400, detail="فایل بیش از ۱۰۰۰۰ ردیف دارد")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "unknown"
@@ -74,18 +106,27 @@ def upload_data_source(
     )
     db.add(ds)
     db.flush()  # تا id تولید شود، بدون commit تا context حفظ شود
-    # capture مقادیر قبل از commit تا بعداً نیازی به refresh تحت RLS نباشد
     ds_id = ds.id
+
+    # ماندگاری فایل (bytea) + متادیتای ستون‌ها — به‌جای dict حافظه‌ای
+    file_storage.save(
+        db,
+        data_source_id=ds_id,
+        organization_id=organization_id,
+        content=content,
+        content_type=file.content_type,
+    )
+    _persist_columns(db, data_source_id=ds_id, organization_id=organization_id, df=df)
+
+    # capture مقادیر قبل از commit تا بعداً نیازی به refresh تحت RLS نباشد
     ds_name = ds.name
     ds_file_type = ds.file_type
     ds_row_count = ds.row_count
     ds_status = ds.status
-    # ذخیره DataFrame برای مرحله Map قبل از commit (context هنوز برقرار است)
-    PENDING_UPLOADS[ds_id] = df
     db.commit()
 
     # preview: 10 ردیف اول — از df که قبلاً داریم، نیازی به DB نیست
-    preview = df.head(10).fillna("").to_dict(orient="records")
+    preview = df.head(PREVIEW_ROWS).fillna("").to_dict(orient="records")
     for row in preview:
         for k, v in list(row.items()):
             if isinstance(v, (pd.Timestamp, datetime)):
@@ -120,9 +161,10 @@ def map_data_source(
     if not ds:
         raise HTTPException(status_code=404, detail="منبع داده یافت نشد")
 
-    # اگر DataFrame در حافظه نیست، سعی کن از DB بازیابی کنی — اما چون فایل اصلی ذخیره نشده، خطا بده
-    df = PENDING_UPLOADS.get(ds_id)
-    if df is None:
+    # بازیابی DataFrame از storage ماندگار (bytea) — پس از restart هم کار می‌کند
+    try:
+        df = _load_dataframe(db, ds=ds, organization_id=organization_id)
+    except FileNotFound:
         raise HTTPException(status_code=400, detail="فایل برای این منبع یافت نشد؛ لطفاً دوباره آپلود کنید")
 
     # اعتبارسنجی ستون‌ها
@@ -132,6 +174,24 @@ def map_data_source(
     for col in [payload.date_column, payload.category_column, payload.label_column]:
         if col and col not in cols:
             raise HTTPException(status_code=400, detail=f"ستون '{col}' یافت نشد")
+
+    # ثبت نقش map شده روی متادیتای ستون‌ها (ماندگار)
+    roles = {payload.measure_column: "measure"}
+    for col, role in [(payload.date_column, "date"), (payload.category_column, "category"), (payload.label_column, "label")]:
+        if col:
+            roles[col] = role
+    db.query(DataSourceColumn).filter(
+        DataSourceColumn.data_source_id == ds_id,
+        DataSourceColumn.organization_id == organization_id,
+    ).update(
+        {DataSourceColumn.mapped_role: None}, synchronize_session=False
+    )
+    for name, role in roles.items():
+        db.query(DataSourceColumn).filter(
+            DataSourceColumn.data_source_id == ds_id,
+            DataSourceColumn.organization_id == organization_id,
+            DataSourceColumn.name == name,
+        ).update({DataSourceColumn.mapped_role: role}, synchronize_session=False)
 
     # پاکسازی قبلی fact_rows برای این data_source (در صورت map مجدد)
     db.query(FactRow).filter(FactRow.data_source_id == ds_id).delete()
@@ -153,7 +213,6 @@ def map_data_source(
             raw_date = row[payload.date_column]
             if not pd.isna(raw_date):
                 try:
-                    # pandas می‌تواند string/date را به datetime تبدیل کند
                     parsed = pd.to_datetime(raw_date, errors="coerce")
                     if not pd.isna(parsed):
                         dim_date = parsed.date()
@@ -188,9 +247,6 @@ def map_data_source(
     # capture قبل از commit
     final_status = ds.status
     db.commit()
-
-    # پاکسازی حافظه موقت
-    PENDING_UPLOADS.pop(ds_id, None)
 
     return MapResponse(data_source_id=ds_id, inserted_rows=inserted, status=final_status)
 

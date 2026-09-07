@@ -22,12 +22,20 @@
 - `apps/api/alembic.ini` + `apps/api/alembic/env.py` (URL از همان زنجیره settings اپ؛ offline `--sql`، CLI و حالت in-process) + `script.py.mako`
 - baseline migration: `alembic/versions/20260906_0001_baseline.py` — دقیقاً schema فاز ۱ (۵ جدول: organizations, users, memberships, data_sources, fact_rows) بدون هیچ جدول جدید و بدون پالیسی RLS (طبق محدودیت؛ RLS همچنان در runtime در `app/main.py` اعمال می‌شود)
 - `app/core/migrations.py`: اجرای migration در startup با `pg_advisory_xact_lock` (جلوگیری از migrate همزمان چند instance)؛ در dialect غیر-PostgreSQL (تست‌های SQLite) no-op
-- `Base.metadata.create_all` از startup حذف شد؛ منطق: دیتابیس تازه → `upgrade head`، دیتابیس موجود فاز ۱ (بدون `alembic_version`) → `stamp head`
+- `Base.metadata.create_all` از startup حذف شد؛ منطق: دیتابیس تازه → `upgrade head`، دیتابیس موجود فاز ۱ (بدون `alembic_version`) → `stamp 0001_baseline` سپس `upgrade head` (تا migrationهای بعد از baseline از قلم نیفتند)
 - رفتار API تغییر نکرده؛ هر ۷ تست API همان پاس‌های قبلی را دارند
 
-## گام‌های بعدی (طبق «مرحله بعد» در README)
+**فاز ۲.۱ — ماندگاری فایل آپلودی + متادیتای ستون‌ها (حذف PENDING_UPLOADS) — پیاده‌سازی‌شده:**
+- انتزاع `FileStorage` (`app/core/storage.py`: save/load/delete، همه tenant-safe) + پشتیبان PostgreSQL bytea (`app/core/storage_postgres.py`)
+- مدل‌های جدید: `DataSourceFile` (`data_source_files` — بایت‌های فایل، ۱:۱ با data_sources) و `DataSourceColumn` (`data_source_columns` — نام/ترتیب/dtype/نقش map شده)
+- migration `alembic/versions/20260906_0002_persist_uploads.py` (زنجیره: 0001_baseline → 0002_persist_uploads) — بدون تغییر جداول موجود و بدون پالیسی RLS (طبق قاعده؛ RLS در runtime)
+- RLS سه‌لایه برای جدول‌های جدید: ستون اجباری `organization_id` (FK CASCADE) + پالیسی Fail-Closed `ENABLE+FORCE` در `app/main.py` + فیلتر `organization_id` در همه کوئری‌های storage
+- `PENDING_UPLOADS` کاملاً حذف شد (فقط اشاره مستنداتی به‌عنوان «جایگزین‌شده» باقی است)؛ map پس از restart هم کار می‌کند (بازیابی از bytea)
+- وضعیت راستی‌آزمایی: ۷ تست محلی pass؛ migration chain با `alembic history/heads` و تولید SQL آفلاین (`upgrade --sql`) تأیید شد. تست‌های integration روی PostgreSQL (که persistence و tenant isolation جدول‌های جدید را end-to-end می‌آزمایند) در این workspace اجرا نشدند (docker در دسترس نیست) — اجرای آن‌ها الزامی: `docker compose -f docker-compose.test.yml up -d` سپس `pytest`
 
-فاز ۲ (بقیه): ۱) ماندگاری فایل آپلودی + schema ستون‌ها (حذف `PENDING_UPLOADS` حافظه‌ای) ۲) اتصال دیتابیس خارجی ۳) موتور KPI ۴) کاتالوگ زمینه (آماده‌سازی دستیار AI)
+## گام‌های بعدی
+
+فاز ۲ (بقیه): ۱) اتصال دیتابیس خارجی ۲) موتور KPI ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
 ## بدهی فنی شناخته‌شده
 
