@@ -95,6 +95,14 @@ def on_startup():
                     USING (organization_id::text = current_setting('app.current_org_id', true))
                     WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
                 """,
+                # فاز ۲.۲ گام ۱: اتصالات دیتابیس خارجی (شامل ciphertext اعتبارنامه) —
+                # همان پالیسی سخت‌گیرانه Fail-Closed؛ رمزها هرگز از مرز سازمان عبور نمی‌کنند
+                "database_connections": """
+                    CREATE POLICY tenant_isolation ON database_connections
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
             }
             for table, policy_sql in rls_tables.items():
                 conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;"))

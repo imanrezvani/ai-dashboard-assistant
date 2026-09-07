@@ -24,8 +24,10 @@ from app.core.database import Base, get_db
 import app.core.database as db_module
 from app.core.security import create_access_token, hash_password
 from app.core.storage import FileNotFound
+from app.core.credentials import encrypt_secret
 from app.routers.data_sources import file_storage
 from app.models import Membership, Organization, RoleEnum, User
+from app.models.database_connection import DatabaseConnection
 from app.models.data_source import DataSource
 from app.models.data_source_column import DataSourceColumn
 from app.models.data_source_file import DataSourceFile
@@ -171,6 +173,11 @@ with engine.begin() as conn:
             FOR ALL USING (organization_id::text = current_setting('app.current_org_id', true))
             WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
         """,
+        "database_connections": """
+            CREATE POLICY tenant_isolation ON database_connections
+            FOR ALL USING (organization_id::text = current_setting('app.current_org_id', true))
+            WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+        """,
     }
     for table, policy_sql in rls_policies.items():
         conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
@@ -287,6 +294,10 @@ with seed_engine.begin() as conn:
         pass
     try:
         conn.execute(text("DELETE FROM data_source_columns"))
+    except Exception:
+        pass
+    try:
+        conn.execute(text("DELETE FROM database_connections"))
     except Exception:
         pass
     try:
@@ -498,12 +509,25 @@ def test_new_tables_tenant_isolation():
         assert len(files_a) >= 1
         assert all(str(f.organization_id) == str(org_a.id) for f in files_a)
         assert all(str(c.organization_id) == str(org_a.id) for c in db.query(DataSourceColumn).all())
+
+        # فاز ۲.۲ گام ۱: database_connections هم tenant-isolated است (ردیف شامل ciphertext)
+        db.add(DatabaseConnection(
+            organization_id=org_a.id, name="gate-conn", engine="postgresql",
+            host="db.example.internal", port=5432, database_name="analytics",
+            username="bi_reader", encrypted_password=encrypt_secret("gate-only"),
+        ))
+        db.commit()  # WITH CHECK با context org A می‌گذرد
+        db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_a.id)})
+        assert db.query(DatabaseConnection).count() == 1, "org A باید اتصال خودش را ببیند"
+        gate_row = db.query(DatabaseConnection).one()
+        assert b"gate-only" not in (gate_row.encrypted_password or b""), "ciphertext نباید شامل plaintext باشد"
         db.rollback()
 
         # به‌عنوان org B: fail-closed — هیچ ردیفی از جدول‌های جدید دیده نمی‌شود
         db.execute(text("SELECT set_config('app.current_org_id', :v, true)"), {"v": str(org_b.id)})
         assert db.query(DataSourceFile).count() == 0, "org B نباید data_source_files ببیند"
         assert db.query(DataSourceColumn).count() == 0, "org B نباید data_source_columns ببیند"
+        assert db.query(DatabaseConnection).count() == 0, "org B نباید database_connections ببیند"
         # لایه storage (defense-in-depth کنار RLS) هم نباید فایل org دیگر را برگرداند
         with pytest.raises(FileNotFound):
             file_storage.load(db, data_source_id=ds_id_a, organization_id=org_b.id)
@@ -515,7 +539,7 @@ def test_rls_policy_exists_for_new_tables():
     # use admin engine to inspect pg_policy (bypass RLS)
     eng = seed_engine
     with eng.connect() as conn:
-        for tbl in ["data_sources", "fact_rows", "data_source_files", "data_source_columns"]:
+        for tbl in ["data_sources", "fact_rows", "data_source_files", "data_source_columns", "database_connections"]:
             row = conn.execute(text(f"SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname='tenant_isolation' AND polrelid='{tbl}'::regclass")).fetchone()
             # fallback if not found via pg_get_expr, try polqual::text
             if not row or not row[0]:

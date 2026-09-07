@@ -336,7 +336,7 @@ tests where clean (pattern of `test_storage_unit.py` / `test_tenant_isolation.py
 |---|---|---|
 | 2.0 | Alembic baseline, startup migrations | **COMPLETE** |
 | 2.1 | Persistent upload storage (`data_source_files`/`data_source_columns`), FileStorage abstraction, PENDING_UPLOADS removal | **COMPLETE** — commit `9dad4d9` |
-| 2.2 | External Database Connections (this document) | **PLANNED / NOT STARTED** |
+| 2.2 | External Database Connections (this document) | **IN PROGRESS** — Step 1 (foundation: model + migration `0004` + RLS + encryption service) complete; connectors/endpoints/import not started |
 | 2.3 | KPI Engine | not planned in detail yet |
 | 2.4 | Context Catalog (AI-assistant preparation) | not planned in detail yet |
 

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 1440
     CORS_ORIGINS: str = "http://localhost:3000"
     TASMIM_APP_DB_PASSWORD: str = _get_secret("TASMIM_APP_DB_PASSWORD", "tasmim_app_secret_dev_only")
+    # فاز ۲.۲: رمزنگاری اعتبارنامه‌های اتصالات دیتابیس خارجی — در production الزامی
+    # (برای تولید کلید: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    ENCRYPTION_KEY: str = _get_secret("ENCRYPTION_KEY", "dev-only-encryption-key-do-not-use-in-prod")
 
     class Config:
         env_file = ".env"

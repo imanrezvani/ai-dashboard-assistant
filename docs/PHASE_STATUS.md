@@ -35,11 +35,19 @@
 - وضعیت اجرا — گیت PostgreSQL واقعی گذرانده شد (PostgreSQL 14، دیتابیس `tasmim_yar_test` روی پورت 5433 با role اپ `tasmim_app` NOBYPASSRLS/NOSUPERUSER): **۲۳ passed، 0 failed، 0 skipped** در یک session — هر دو ماژول integration با هم اجرا شدند (persistence بایت‌ها و متادیتا، round-trip map از نسخه ماندگار، mapped_role، tenant-isolation جدول‌های جدید، RLS ENABLE+FORCE+Fail-Closed برای چهار جدول، NOBYPASSRLS و WITH CHECK در runtime)؛ `alembic upgrade head` روی دیتابیس خالی تا `0003` اعمال شد، `alembic current` = `0003_align_created_at_nullable`، دقیقاً یک head، و `alembic check` = «No new upgrade operations detected» (قبل و بعد از اجرای تست‌ها)
 - دو عیب واقعی در گیت کشف و رفع شد: ۱) reset مخرب schema در import-time `test_rls_postgres.py` به‌همراه clobber شدن `dependency_overrides[get_db]` در import-time `test_tenant_isolation.py` که اجرای هم‌زمان دو ماژول integration در یک session را می‌شکست — با حذف drop_all، cleanup فقط ردیف‌های خود ماژول و fixture خود-ترمیم override رفع شد ۲) drift nullable سه ستون `created_at` (organizations/users/memberships) بین baseline و مدل‌ها — با migration جدید `0003_align_created_at_nullable` هم‌تراز شد (baseline دست‌نخورده؛ `alembic check` اکنون پاک است)
 
+**فاز ۲.۲ — اتصالات دیتابیس خارجی — در حال اجرا (گام ۱: foundation تکمیل شد):**
+- مدل `DatabaseConnection` (`database_connections` — `encrypted_password` فقط-ciphertext، `enabled`/`status`/`last_checked_at`، یونیک name per-org) + migration `0004_database_connections` روی زنجیره `0003` (تک‌head، بدون create_all)
+- سرویس رمزنگاری `app/core/credentials.py` (Fernet از `cryptography==50.0.1`) با `ENCRYPTION_KEY` در settings — نبود کلید در production خطای صریح می‌دهد؛ کلید Fernet از sha256(secret) مشتق می‌شود
+- RLS runtime در `app/main.py`: ENABLE + FORCE + Fail-Closed برای `database_connections` (همان الگوی فاز ۲.۱)
+- تست‌ها: ۹ تست unit جدید (`test_db_connection_unit.py`: round-trip/tamper/کلید اشتباه/الزام کلید در production/defaults/یونیک per-org/نبودِ plaintext پس از persist/فیلتر org/cascade) + گسترش پوشش integration (`test_data_sources.py`: RLS setup + assert ENABLE/FORCE/Fail-Closed/org-scoped برای جدول جدید + ایزولاسیون tenant ردیف اتصال)
+- گیت: **۳۲ passed، 0 failed، 0 skipped** روی PostgreSQL واقعی؛ `alembic upgrade head` روی دیتابیس خالی تا `0004`؛ `alembic current` = `0004_database_connections`؛ `alembic check` پاک (قبل و بعد از تست‌ها)
+- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): connector (فقط PostgreSQL)، API endpoints، import bridge — شروع نشده
+
 ## گام‌های بعدی
 
 فاز ۲ (بقیه): ۱) اتصال دیتابیس خارجی ۲) موتور KPI ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
-طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — فاز ۲.۲ هنوز شروع نشده است (PLANNED / NOT STARTED).
+طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام ۱ فاز ۲.۲ (foundation) تکمیل شد؛ گام‌های بعدی: connector، API endpoints، import bridge (طبق طرح).
 
 ## بدهی فنی شناخته‌شده
 
