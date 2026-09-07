@@ -20,6 +20,8 @@ import sys
 import uuid
 import pathlib
 
+import pytest
+
 # PYTHONPATH: apps/api باید در path باشد
 API_DIR = pathlib.Path(__file__).resolve().parents[1]
 if str(API_DIR) not in sys.path:
@@ -65,7 +67,22 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
+@pytest.fixture(autouse=True)
+def _sqlite_db_override():
+    """override فقط در طول تست‌های همین ماژول نصب و بعد restore می‌شود.
+
+    قبلاً این تخصیص در import-time انجام می‌شد و کلید get_db را برای کل session
+    clobber می‌کرد — override PostgreSQL ماژول test_data_sources.py را نابود می‌کرد
+    و تست‌های API آن در run کامل pytest fail می‌شدند (هر ماژول به‌تنهایی سبز بود).
+    """
+    previous = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    if previous is not None:
+        app.dependency_overrides[get_db] = previous
+    else:
+        app.dependency_overrides.pop(get_db, None)
+
 
 client = TestClient(app)
 

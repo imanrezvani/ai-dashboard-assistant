@@ -95,8 +95,10 @@ def _get_test_engine():
 engine, used_url = _get_test_engine()
 is_app_user = "tasmim_app" in used_url
 
-# اطمینان از تمیز بودن
-Base.metadata.drop_all(bind=engine)
+# فاز ۲.۱ گیت — ایزولیشن تست:
+# فقط «ایجاد در صورت نبود» — هیچ drop/recreate مخرب در import-time انجام نمی‌شود.
+# (قبلاً Base.metadata.drop_all در import، داده‌های seed‌شدهٔ test_data_sources.py
+# را در همان session pytest نابود می‌کرد.)
 Base.metadata.create_all(bind=engine)
 
 # اعطای دسترسی به tasmim_app اگر با superuser وصل شدیم
@@ -145,11 +147,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # ----- داده اولیه: دو org + دو membership -----
 def _seed():
-    # پاکسازی قبلی
+    # پاکسازی فقط ردیف‌های متعلق به همین ماژول (slug/emailهای اختصاصی این تست).
+    # organizations/users تحت RLS نیستند و memberships با FK CASCADE پاک می‌شود؛
+    # داده‌های test_data_sources.py (slugهای org-*-ds و emailهای *-ds@) دست‌نخورده می‌مانند
+    # تا هر دو ماژول integration بتوانند در یک session pytest با هم اجرا شوند.
     with SessionLocal() as db:
-        db.execute(text("DELETE FROM memberships;"))
-        db.execute(text("DELETE FROM organizations;"))
-        db.execute(text("DELETE FROM users;"))
+        db.execute(text("DELETE FROM organizations WHERE slug IN ('org-a', 'org-b')"))
+        db.execute(text("DELETE FROM users WHERE email IN ('alice@org-a.test', 'bob@org-b.test') OR email LIKE 'tmp-%@test.local'"))
         db.commit()
     org_a_id = uuid.uuid4()
     org_b_id = uuid.uuid4()
