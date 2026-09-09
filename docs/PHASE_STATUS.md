@@ -98,7 +98,22 @@
 - اعتبارسنجی دفاعی تعریف قبل از محاسبه (§3.6) — همان قواعد گام ۱؛ engine database-agnostic و tenant-blind است (ایزولاسیون مسئول لایه بالادستی)
 - تست‌ها: ۳۵ unit بدون DB (`tests/test_kpi_engine_unit.py`) — پوشش هر ۲۰ محور درخواستی شامل مرز سال ISO (2027-01-01 → 2026-W53)، دقت 0.1×10=1.0000 بدون drift شناور، ROUND_HALF_UP، بی‌اثر بودن ترتیب ورودی
 - گیت: **۱۵۰ passed، 0 failed، 0 skipped** (۱۱۵ قبلی + ۳۵ جدید)؛ بدون migration جدید (گام ۲ هیچ تغییر schema ندارد)؛ Step 1 دست‌نخورده
-- گام‌های بعدی فاز ۲.۳ (شروع نشده): گام ۳ API، گام ۴ سری + گیت نهایی
+- گام‌های بعدی فاز ۲.۳ (شروع نشده): گام ۴ سری + گیت نهایی
+
+**فاز ۲.۳ — گام ۳: API تعریف KPI — تکمیل‌شده:**
+- راستر `app/routers/kpis.py` — دقیقاً ۶ اندپوینت طرح §4 (بدون /series — گام ۴):
+    `POST /kpis` و `PATCH /kpis/{id}` و `DELETE /kpis/{id}` → **manager+**؛
+    `GET /kpis` و `GET /kpis/{id}` و `POST /kpis/{id}/compute` → **analyst+**؛ viewer هیچ دسترسی‌ای
+- اعتبارسنجی فقط از قواعد گام ۱ (`validate_kpi_definition` — منبع واحد قواعد؛ بدون قاعده تکراری) → نقض → 422؛ نام تکراری در org → 409؛ سازمان نامشخص/غیرعضو → همان قراردادهای `require_role` موجود
+- organization_id هرگز writable نیست — از membership تأییدشده می‌آید؛ همه کوئری‌ها org-scoped (RLS + فیلتر صریح — لایه ۳ دفاع کنار RLS)
+- DataSource فقط از همان org و فقط usable (status == "mapped") قابل ارجاع/محاسبه — cross-org منبع → 404، منبع map نشده → 400
+- compute: هیچ logic تجمیع/فیلتر/گروه‌بندی در راستر نیست — فقط fetch تننت-scoped fact_rows (فیلتر organization_id + data_source_id) → `FactRecord.from_fact_row` → `compute_kpi` موتور pure گام ۲ (تست spy عبور اجباری از موتور را ثابت می‌کند)
+- خروجی compute قرارداد گام ۲: value به‌صورت decimal-string ۴رقم (هرگز float)؛ empty → sum/count="0.0000"، avg/min/max=null با HTTP 200؛ KPI غیرفعال → 400؛ cross-org id → 404 (بدون افشای وجود) روی همه اندپوینت‌ها
+- اسکیماهای `app/schemas/kpi.py` — `password`/credential فیلدی وجود ندارد؛ هیچ راز/DSN در پاسخ/خطا نیست
+- بدون migration جدید (Step 3 هیچ تغییر schema لازم نداشت)؛ بدون تغییر 0006؛ `alembic current` = `0006_kpi_definitions` تک‌head، `alembic check` پاک
+- تست‌ها: ۱۸ integration روی PostgreSQL واقعی (`tests/test_kpis_api.py`) — ماتریس نقش‌ها (viewer 403 روی همه، analyst ساخت 403)، org-scoped list/get، cross-org 404 روی get/compute/delete، دزدیدن منبع cross-org رد، نام تکراری 409، همه قواعد اعتبارسنجی 422 (aggregation/group_by/granularity iff/filters/>10/پنجره معکوس)، revalidate کامل PATCH (granularity روی category → 422)، منبع pending → 400، delete، compute sum/avg/min/max/count با مقدار دقیق decimal-string ("60.7500")، فیلتر alpha=40.7500، پنجره inclusive (مرزها داخل)، empty semantics با HTTP 200، KPI غیرفعال 400، عبور اجباری از موتور pure (spy)، بدون افشای credential
+- گیت: **۱۶۸ passed، 0 failed، 0 skipped** (۱۵۰ قبلی + ۱۸ جدید) در یک session؛ ماژول جدید rerun-clean
+- گام بعدی فاز ۲.۳ (شروع نشده): گام ۴ سری + گیت نهایی
 
 ## بدهی فنی شناخته‌شده
 
