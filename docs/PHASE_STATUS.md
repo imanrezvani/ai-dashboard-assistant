@@ -59,13 +59,21 @@
 - اسکیماها (`app/schemas/database_connection.py`): پاسخ‌ها `has_stored_credentials` دارند و هیچ رمز/hint/DSN برنمی‌گردانند؛ `engine` فقط postgresql؛ `ssl_mode` whitelist
 - تست‌ها: ۱۵ تست integration جدید (`test_db_connections_api.py`) روی PostgreSQL واقعی با scratch external: ماتریس نقش‌ها (viewer/analyst/manager/admin)، write-only بودن password (create/get/list/DB)، cross-org 404 روی همه اندپوینت‌ها، duplicate، flow واقعی test/tables/sample، خطای sanitized رمز غلط، clamping/اعتبارسنجی limit، جدول ناموجود → 502، disabled → 400، lifecycle کامل create→test→tables→sample→delete
 - گیت: **۷۸ passed، 0 failed، 0 skipped** در یک session (۶۳ قبلی + ۱۵ API)؛ بدون migration جدید؛ `alembic current` = `0004_database_connections`، تک‌head، `alembic check` پاک
-- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): import bridge — شروع نشده
+**فاز ۲.۲ — گام ۴: import bridge — تکمیل‌شده (فاز ۲.۲ کامل شد):**
+- فقط یک ستون nullable به مدل DataSource اضافه شد: `database_connection_id` (FK به `database_connections.id` با `ON DELETE SET NULL` — حذف اتصال، منابع import شده و fact_rows آن‌ها را دست‌نخورده می‌گذارد؛ فقط خط منشأ NULL می‌شود) + ایندکس؛ `DataSourceOut` فیلد اختیاری دارد
+- migration `0005_data_source_provenance` روی زنجیره `0004` (تک‌head؛ بدون RLS در migration طبق قاعده) — درس `0003`: ستون مدل `index=True` دارد تا `alembic check` پاک بماند (drift index در گیت کشف و با هم‌ترازسازی مدل رفع شد، migration دست‌نخورده)
+- توابع مشترک ingestion بدون تغییر رفتار به `app/services/ingest.py` استخراج شدند (parse/persist_columns/load_dataframe/preview_records) — `data_sources.py` فقط delegate می‌کند؛ آپلود CSV/Excel همان پیام‌ها و کدهای قبلی را دارد
+- اندپوینت جدید: `POST /database-connections/{id}/import` (فقط admin+، §6/§7 طرح) — فقط پارامترهای ساختاریافته (`table`/`limit`/`name`)، بدون هیچ SQL خام؛ تنها کاری که می‌کند جایگزینی منبع DataFrame است (فایل آپلودی → جدول PostgreSQL خارجی از طریق connector موجود): DataSource با `file_type="postgres"` + `status="pending"` + ذخیره CSV سریال‌شده در `data_source_files` از طریق همان FileStorage فاز ۲.۱ + `persist_columns` — map کردن همان `POST /data-sources/{id}/map` موجود می‌ماند → fact_rows؛ پیاده‌سازی موازی ingestion وجود ندارد
+- تراکنش: واکشی خارجی قبل از هر INSERT اپ؛ خطا پس از ساخت DataSource → rollback کامل (بدون DataSource گمراه‌کننده ناقص)؛ جدول خالی → 400؛ جدول ناموجود/تزریق شناسه → 502 sanitized («table not found»)؛ اتصال ناموفق → 502؛ اتصال disabled → 400؛ cross-org → 404؛ درخواست ناقص/سقف اسکیما (limit > 1M) → 422؛ limit بزرگ‌تر از MAX_FETCH_ROWS در connector clamp می‌شود
+- تست‌ها: ۱۷ تست integration جدید (`tests/test_import_bridge.py`) روی PostgreSQL واقعی با scratch external: import موفق + round-trip کامل (DataSource ماندگار با provenance، بایت‌های CSV در data_source_files، متادیتای ستون‌ها با dtype/position، map موجود → ۳ fact_rows با measure/date/label درست و organization_id درست، DataSourceOut نشان‌دهنده provenance)، import دوباره → DataSource مستقل، لایه‌بندی سقف (422 اسکیما + clamp connector)، tenant isolation (cross-org import → 404 و هیچ ردیفی ساخته نمی‌شود؛ org B منبع/فایل/map را نمی‌بیند)، امنیت (رمز plaintext در هیچ پاسخ/خطایی نیست؛ شناسه‌های تزریقی → 502 sanitized بدون اجرا)، رفتار خطا (disabled/رمز غلط/جدول ناموجود/جدول خالی/host غیرقابل‌دسترس با connect_timeout محدود/درخواست ناقص)، provenance (حذف اتصال → SET NULL و DataSource/status/fact_rows سالم و map مجدد کار می‌کند)، schema migration (nullable + FK SET NULL + index) و بدون رگرسیون آپلود (provenance=NULL)
+- گیت نهایی: **۹۵ passed، 0 failed، 0 skipped** در یک session روی PostgreSQL واقعی (۷۸ قبلی + ۱۷ جدید)؛ زنجیره کامل روی دیتابیس خالی: ۵/۵ migration اعمال شد، `current` = `0005_data_source_provenance` (تک‌head)، `alembic check` پاک قبل و بعد از تست‌ها؛ role اپ همچنان `NOSUPERUSER`/`NOBYPASSRLS`
+- **معیارهای پذیرش §10 طرح همگی سبز شدند — فاز ۲.۲ کامل است.**
 
 ## گام‌های بعدی
 
 فاز ۲ (بقیه): ۱) اتصال دیتابیس خارجی ۲) موتور KPI ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
-طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام‌های ۱ (foundation)، ۲ (connector PostgreSQL) و ۳ (API endpoints) تکمیل شدند؛ گام بعدی: import bridge (طبق طرح).
+طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — هر ۴ گام (foundation، connector PostgreSQL، API endpoints، import bridge) تکمیل و گیت شدند؛ **فاز ۲.۲ کامل است.** گام بعدی نقشه راه: فاز ۲.۳ (موتور KPI) — شروع نشده.
 
 ## بدهی فنی شناخته‌شده
 

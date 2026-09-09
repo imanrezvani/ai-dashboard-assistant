@@ -1,6 +1,4 @@
-import io
 import uuid
-from datetime import datetime
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -15,6 +13,13 @@ from app.models.data_source_column import DataSourceColumn
 from app.models.fact_row import FactRow
 from app.models.user import User
 from app.schemas.data_source import DataSourceOut, MapRequest, MapResponse, UploadPreviewResponse
+from app.services.ingest import (
+    MAX_UPLOAD_ROWS,
+    load_dataframe,
+    parse_file,
+    persist_columns,
+    preview_records,
+)
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
@@ -22,51 +27,7 @@ router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 # فایل به‌صورت bytea در data_source_files ذخیره می‌شود؛ پس از restart هم در دسترس است.
 file_storage: FileStorage = PostgresFileStorage()
 
-MAX_ROWS = 10000
 PREVIEW_ROWS = 10
-
-
-def _infer_dtype(dtype) -> str | None:
-    """نوع ستون pandas به رشته کوتاه قابل ذخیره."""
-    if dtype is None:
-        return None
-    return str(dtype)
-
-
-def _parse_file(filename: str, content: bytes) -> pd.DataFrame:
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext == "csv":
-        try:
-            return pd.read_csv(io.BytesIO(content))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"خطا در پارس CSV: {e}")
-    elif ext in ("xlsx", "xls"):
-        try:
-            return pd.read_excel(io.BytesIO(content), engine="openpyxl")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"خطا در پارس Excel: {e}")
-    else:
-        raise HTTPException(status_code=400, detail="فرمت فایل باید CSV یا Excel باشد")
-
-
-def _persist_columns(db: Session, *, data_source_id: uuid.UUID, organization_id: uuid.UUID, df: pd.DataFrame) -> None:
-    """متادیتای ستون‌ها را در data_source_columns ماندگار می‌کند (جایگزین اتکا به حافظه)."""
-    for position, name in enumerate(df.columns.astype(str)):
-        db.add(
-            DataSourceColumn(
-                data_source_id=data_source_id,
-                organization_id=organization_id,
-                name=name,
-                position=position,
-                dtype=_infer_dtype(df[name].dtype),
-            )
-        )
-
-
-def _load_dataframe(db: Session, *, ds: DataSource, organization_id: uuid.UUID) -> pd.DataFrame:
-    """بازیابی DataFrame از storage ماندگار (bytea → parse)."""
-    content = file_storage.load(db, data_source_id=ds.id, organization_id=organization_id)
-    return _parse_file(ds.name, content)
 
 
 @router.post("/upload", response_model=UploadPreviewResponse)
@@ -87,12 +48,15 @@ def upload_data_source(
     if not content:
         raise HTTPException(status_code=400, detail="فایل خالی است")
 
-    df = _parse_file(file.filename, content)
+    try:
+        df = parse_file(file.filename, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if df.empty:
         raise HTTPException(status_code=400, detail="فایل هیچ ردیفی ندارد")
 
     # محدودیت ساده: حداکثر 10000 ردیف برای جلوگیری از overload
-    if len(df) > MAX_ROWS:
+    if len(df) > MAX_UPLOAD_ROWS:
         raise HTTPException(status_code=400, detail="فایل بیش از ۱۰۰۰۰ ردیف دارد")
 
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "unknown"
@@ -116,7 +80,7 @@ def upload_data_source(
         content=content,
         content_type=file.content_type,
     )
-    _persist_columns(db, data_source_id=ds_id, organization_id=organization_id, df=df)
+    persist_columns(db, data_source_id=ds_id, organization_id=organization_id, df=df)
 
     # capture مقادیر قبل از commit تا بعداً نیازی به refresh تحت RLS نباشد
     ds_name = ds.name
@@ -126,13 +90,7 @@ def upload_data_source(
     db.commit()
 
     # preview: 10 ردیف اول — از df که قبلاً داریم، نیازی به DB نیست
-    preview = df.head(PREVIEW_ROWS).fillna("").to_dict(orient="records")
-    for row in preview:
-        for k, v in list(row.items()):
-            if isinstance(v, (pd.Timestamp, datetime)):
-                row[k] = v.isoformat()
-            elif isinstance(v, float) and pd.isna(v):
-                row[k] = None
+    preview = preview_records(df, PREVIEW_ROWS)
 
     return UploadPreviewResponse(
         id=ds_id,
@@ -163,9 +121,11 @@ def map_data_source(
 
     # بازیابی DataFrame از storage ماندگار (bytea) — پس از restart هم کار می‌کند
     try:
-        df = _load_dataframe(db, ds=ds, organization_id=organization_id)
+        df = load_dataframe(db, ds=ds, organization_id=organization_id, storage=file_storage)
     except FileNotFound:
         raise HTTPException(status_code=400, detail="فایل برای این منبع یافت نشد؛ لطفاً دوباره آپلود کنید")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # اعتبارسنجی ستون‌ها
     cols = list(df.columns.astype(str))

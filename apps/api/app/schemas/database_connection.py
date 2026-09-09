@@ -63,3 +63,28 @@ class SampleRowsOut(BaseModel):
     table: str
     limit: int
     rows: list[dict[str, Any]]
+
+
+class ImportRequest(BaseModel):
+    """پارامترهای import bridge (فاز ۲.۲ گام ۴، §7).
+
+    هیچ SQL خامی پذیرفته نمی‌شود — فقط نام جدول (name یا schema.name) که در
+    discover_tables باید موجود باشد؛ `limit` در connector به MAX_FETCH_ROWS
+    clamp می‌شود و هیچ مسیر دور زدن وجود ندارد.
+    """
+
+    table: str = Field(min_length=1, max_length=255)
+    limit: int = Field(default=10000, ge=1, le=1_000_000)
+    name: Optional[str] = Field(default=None, max_length=255)  # نام DataSource؛ پیش‌فرض نام جدول
+
+
+class ImportResultOut(BaseModel):
+    """نتیجه ایمن import — هیچ اعتبارنامه/DSN/SQL در پاسخ نیست."""
+
+    data_source_id: uuid.UUID
+    name: str
+    file_type: str  # همیشه "postgres" برای منابع import شده
+    row_count: int
+    status: str  # pending تا map
+    columns: list[str]
+    database_connection_id: uuid.UUID

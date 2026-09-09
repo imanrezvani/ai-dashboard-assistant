@@ -236,8 +236,10 @@ Phase 2.2 **reuses it unchanged** for external sources:
 - **No `create_all` startup migration** — schema changes only via Alembic; app
   startup keeps `run_startup_migrations(engine)` (Phase 2.0 behavior). Test modules
   may keep their existing `create_all`-if-missing pattern.
-- `0004` creates `database_connections` (+ unique constraint, indexes) and adds
-  `data_sources.database_connection_id`.
+- `0004` creates `database_connections` (+ unique constraint, indexes). The
+  provenance column ships as its own migration `0005_data_source_provenance`
+  (`down_revision = "0004_database_connections"`) — nullable
+  `data_sources.database_connection_id` FK `ON DELETE SET NULL` + index.
 - **No RLS in the migration** — repo convention: RLS is applied at runtime by
   `app/main.py` (`ENABLE + FORCE + fail-closed`), consistent with Phase 2.1. Add
   `database_connections` to the `rls_tables` dict there, and to the RLS setup +
@@ -301,24 +303,24 @@ tests where clean (pattern of `test_storage_unit.py` / `test_tenant_isolation.py
 
 ## 10. Acceptance criteria (all must be green to mark Phase 2.2 COMPLETE)
 
-- [ ] `database_connections` table exists via migration `0004` only; chain linear
-      (`… → 0003 → 0004`), single head; no `create_all` at startup.
-- [ ] `alembic upgrade head` clean on a fresh empty PostgreSQL; `alembic current`
-      = `0004…`; `alembic check` reports no operations.
-- [ ] RLS verified at runtime on `database_connections`: ENABLED + FORCE +
+- [x] `database_connections` table exists via migration `0004` only; chain linear
+      (`… → 0003 → 0004 → 0005`), single head; no `create_all` at startup.
+- [x] `alembic upgrade head` clean on a fresh empty PostgreSQL; `alembic current`
+      = `0005_data_source_provenance`; `alembic check` reports no operations.
+- [x] RLS verified at runtime on `database_connections`: ENABLED + FORCE +
       fail-closed + organization-scoped; app role `NOSUPERUSER`/`NOBYPASSRLS` unchanged.
-- [ ] Cross-org access returns 404 on every endpoint; RLS blocks DB-level access.
-- [ ] Password stored only as ciphertext; plaintext never appears in any API
+- [x] Cross-org access returns 404 on every endpoint; RLS blocks DB-level access.
+- [x] Password stored only as ciphertext; plaintext never appears in any API
       response, log, or error; `ENCRYPTION_KEY` enforced in production.
-- [ ] Connector is PostgreSQL-only, SELECT-only, identifier-safe, timeout-bounded,
+- [x] Connector is PostgreSQL-only, SELECT-only, identifier-safe, timeout-bounded,
       row-limit-clamped; no arbitrary-SQL endpoint exists.
-- [ ] All 7 management/inspection endpoints + `POST /database-connections/{id}/import`
+- [x] All 7 management/inspection endpoints + `POST /database-connections/{id}/import`
       behave per §6/§7 with the §6 authorization matrix.
-- [ ] Imported tables normalize into `fact_rows` via the unchanged map flow;
+- [x] Imported tables normalize into `fact_rows` via the unchanged map flow;
       provenance column set; connection deletion leaves ingested data intact.
-- [ ] Full suite green with 0 skipped integration tests on a real PostgreSQL
+- [x] Full suite green with 0 skipped integration tests on a real PostgreSQL
       (Phase 2.1's 23 tests must not regress).
-- [ ] `docs/PHASE_STATUS.md` updated: Phase 2.2 COMPLETE with evidence.
+- [x] `docs/PHASE_STATUS.md` updated: Phase 2.2 COMPLETE with evidence.
 
 ## 11. Explicit non-goals (Phase 2.2 must NOT include)
 
@@ -336,7 +338,7 @@ tests where clean (pattern of `test_storage_unit.py` / `test_tenant_isolation.py
 |---|---|---|
 | 2.0 | Alembic baseline, startup migrations | **COMPLETE** |
 | 2.1 | Persistent upload storage (`data_source_files`/`data_source_columns`), FileStorage abstraction, PENDING_UPLOADS removal | **COMPLETE** — commit `9dad4d9` |
-| 2.2 | External Database Connections (this document) | **IN PROGRESS** — Step 1 (foundation: model + migration `0004` + RLS + encryption service) complete; connectors/endpoints/import not started |
+| 2.2 | External Database Connections (this document) | **COMPLETE** — Steps 1 (foundation), 2 (PostgreSQL connector), 3 (API endpoints), 4 (import bridge + provenance `0005`) all implemented and gated |
 | 2.3 | KPI Engine | not planned in detail yet |
 | 2.4 | Context Catalog (AI-assistant preparation) | not planned in detail yet |
 

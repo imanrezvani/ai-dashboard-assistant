@@ -13,6 +13,7 @@ class DataSourceOut(BaseModel):
     uploaded_at: datetime
     row_count: int
     status: str
+    database_connection_id: Optional[uuid.UUID] = None  # فاز ۲.۲: منشأ import (NULL برای آپلود فایل)
 
     class Config:
         from_attributes = True

@@ -16,6 +16,7 @@
 import uuid
 from datetime import datetime, timezone
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -24,14 +25,19 @@ from app.core.database import get_db
 from app.core.credentials import encrypt_secret
 from app.middleware.tenant import get_current_organization_id, get_current_user, require_role
 from app.models.database_connection import DatabaseConnection
+from app.models.data_source import DataSource
 from app.models.user import User
 from app.schemas.database_connection import (
     ConnectionTestOut,
     DatabaseConnectionCreate,
     DatabaseConnectionOut,
+    ImportRequest,
+    ImportResultOut,
     SampleRowsOut,
     TableOut,
 )
+from app.services.ingest import persist_columns, serialize_dataframe_to_csv
+from app.core.storage_postgres import PostgresFileStorage
 
 router = APIRouter(prefix="/database-connections", tags=["database-connections"])
 
@@ -40,6 +46,9 @@ MANAGER_ROLES = ["owner", "admin", "manager"]
 ANALYST_ROLES = ["owner", "admin", "manager", "analyst"]
 
 DEFAULT_SAMPLE_LIMIT = 50
+
+# storage ماندگار — همان لایه فاز ۲.۱ که data_sources.py استفاده می‌کند
+import_file_storage = PostgresFileStorage()
 
 
 def _get_own_connection(db: Session, *, conn_id: uuid.UUID, organization_id: uuid.UUID) -> DatabaseConnection:
@@ -248,3 +257,92 @@ def sample_table(
     except ConnectorError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return {"table": table, "limit": limit, "rows": rows}
+
+
+@router.post("/{conn_id}/import", response_model=ImportResultOut, status_code=201)
+def import_table(
+    conn_id: uuid.UUID,
+    payload: ImportRequest,
+    membership=Depends(require_role(ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Import bridge — فاز ۲.۲ گام ۴ (docs/PHASE2_PLAN.md §7).
+
+    تنها کاری که این endpoint می‌کند: جایگزینی منبع DataFrame
+    (فایل آپلودی → جدول PostgreSQL خارجی). همه‌چیز بعد از DataFrame
+    دقیقاً همان مسیر فاز ۲.۱ است:
+        DataSource (status=pending, file_type="postgres")
+        → FileStorage.save (CSV سریال‌شده در data_source_files)
+        → persist_columns (متادیتا در data_source_columns)
+    و map کردن مسیر موجود POST /data-sources/{id}/map می‌ماند (fact_rows).
+
+    امنیت:
+      - اتصال فقط با RLS + فیلتر organization_id fetch می‌شود (cross-org → 404)
+      - اتصال disabled → 400
+      - فقط پارامترهای ساختاریافته؛ هیچ SQL خامی پذیرفته نمی‌شود
+      - شناسه جدول فقط در connector با psycopg.sql.Identifier و پس از تطبیق با
+        discover_tables استفاده می‌شود (تزریق → «table not found»)
+      - limit در connector به MAX_FETCH_ROWS clamp می‌شود
+      - هیچ رمز/DSN در پاسخ/خطا/log نیست (خطاهای connector از قبل sanitized)
+
+    تراکنش: fetch خارجی قبل از هر INSERT اپ انجام می‌شود؛ اگر بعد از ساخت
+    DataSource/فایل خطایی رخ دهد، db.rollback() همه را برمی‌گرداند — DataSource
+    گمراه‌کننده‌ای با status ناقص باقی نمی‌ماند.
+    """
+    conn = _get_own_connection(db, conn_id=conn_id, organization_id=membership.organization_id)
+    _ensure_enabled(conn)
+
+    # ۱) واکشی از منبع خارجی — قبل از هر تغییر وضعیت محلی (مرز تراکنش تمیز)
+    try:
+        df: pd.DataFrame = get_connector(conn).fetch_dataframe(payload.table, payload.limit)
+    except ConnectorError as exc:
+        # پیام sanitized («table not found» / «connection failed» / ...) — بدون رمز/DSN
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="جدول خارجی هیچ ردیفی ندارد")
+
+    # ۲) ساخت دقیقاً همان artifactهای upload — بدون هیچ پیاده‌سازی موازی
+    name = payload.name or payload.table
+    ds = DataSource(
+        organization_id=membership.organization_id,
+        name=name,
+        file_type="postgres",
+        row_count=len(df),
+        status="pending",
+        database_connection_id=conn.id,
+    )
+    db.add(ds)
+    db.flush()  # id بدون commit (context RLS حفظ می‌شود)
+    ds_id = ds.id
+
+    import_file_storage.save(
+        db,
+        data_source_id=ds_id,
+        organization_id=membership.organization_id,
+        content=serialize_dataframe_to_csv(df),
+        content_type="text/csv",
+    )
+    persist_columns(db, data_source_id=ds_id, organization_id=membership.organization_id, df=df)
+
+    # ۳) capture مقادیر قبل از commit (context RLS تراکنش-local است)
+    out_name = ds.name
+    out_row_count = ds.row_count
+    out_status = ds.status
+    out_columns = list(df.columns.astype(str))
+    conn_id_captured = conn.id
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="خطا در ثبت نتیجه import")
+
+    return ImportResultOut(
+        data_source_id=ds_id,
+        name=out_name,
+        file_type="postgres",
+        row_count=out_row_count,
+        status=out_status,
+        columns=out_columns,
+        database_connection_id=conn_id_captured,
+    )

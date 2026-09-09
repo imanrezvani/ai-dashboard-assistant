@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -18,3 +19,8 @@ class DataSource(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending, mapped, failed
+    # فاز ۲.۲ گام ۴ — خط منشأ (provenance): فقط برای منابع import شده از اتصال خارجی؛
+    # آپلود فایل NULL می‌ماند. حذف اتصال داده‌های import شده را دست‌نخورده می‌گذارد (ON DELETE SET NULL).
+    database_connection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("database_connections.id", ondelete="SET NULL"), nullable=True, index=True
+    )
