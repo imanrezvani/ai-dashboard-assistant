@@ -52,13 +52,20 @@
   - رمز فقط داخل `_connect` و فقط پس از RBAC+RLS decrypt می‌شود (kwargs-based، هیچ conninfo-string حاوی رمز ساخته نمی‌شود)؛ خطاها sanitized (بدون رمز/DSN/جزئیات درایور)
 - تست‌ها: ۹ تست unit (`test_connector_unit.py`: قرارداد ABC، clamping حدی، شناسه تزریق‌شده، credential non-disclosure، factory) + ۱۹ تست integration روی PostgreSQL واقعی (`test_connector_postgres.py`: اتصال موفق/رمز غلط sanitized/host غیرقابل‌دسترس و blackhole با connect_timeout محدود/discovery/sample/DataFrame/سقف ردیف/statement_timeout با قفل واقعی ACCESS EXCLUSIVE/خواندن-فقط در سطح session با INSERT رد شده/نبود plaintext در state و خطاها/RLS cross-org و fail-closed)
 - گیت: **۶۳ passed، 0 failed، 0 skipped** در یک session (۳۲ قبلی + ۱۹ connector + ۱۲ unit)؛ بدون migration جدید (گام ۲ هیچ تغییر schema لازم نداشت)؛ `alembic current` = `0004_database_connections`، تک‌head، `alembic check` پاک
-- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): API endpoints، import bridge — شروع نشده
+
+**فاز ۲.۲ — گام ۳: API endpoints — تکمیل‌شده:**
+- راستر `app/routers/database_connections.py` با هر ۷ اندپوینت طرح (§6): POST create (admin+، password فقط-ورودی و encrypt)، GET list/get (manager+)، DELETE (admin+)، POST test (admin+ — اجرای واقعی test_connection و ثبت status/last_checked_at/last_error sanitized)، GET tables (manager+ — discover_tables)، GET tables/{table}/sample (analyst+ — sample_rows با limit≤1000)
+- ماتریس نقش‌ها با `require_role` موجود؛ cross-org id → **404** (نه 403) با RLS + فیلتر صریح organization_id؛ اتصال disabled → 400 روی test/tables/sample؛ duplicate name → 409؛ بدون PUT/PATCH (rotate = delete + recreate)
+- اسکیماها (`app/schemas/database_connection.py`): پاسخ‌ها `has_stored_credentials` دارند و هیچ رمز/hint/DSN برنمی‌گردانند؛ `engine` فقط postgresql؛ `ssl_mode` whitelist
+- تست‌ها: ۱۵ تست integration جدید (`test_db_connections_api.py`) روی PostgreSQL واقعی با scratch external: ماتریس نقش‌ها (viewer/analyst/manager/admin)، write-only بودن password (create/get/list/DB)، cross-org 404 روی همه اندپوینت‌ها، duplicate، flow واقعی test/tables/sample، خطای sanitized رمز غلط، clamping/اعتبارسنجی limit، جدول ناموجود → 502، disabled → 400، lifecycle کامل create→test→tables→sample→delete
+- گیت: **۷۸ passed، 0 failed، 0 skipped** در یک session (۶۳ قبلی + ۱۵ API)؛ بدون migration جدید؛ `alembic current` = `0004_database_connections`، تک‌head، `alembic check` پاک
+- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): import bridge — شروع نشده
 
 ## گام‌های بعدی
 
 فاز ۲ (بقیه): ۱) اتصال دیتابیس خارجی ۲) موتور KPI ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
-طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام‌های ۱ (foundation) و ۲ (connector PostgreSQL) تکمیل شدند؛ گام‌های بعدی: API endpoints، import bridge (طبق طرح).
+طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام‌های ۱ (foundation)، ۲ (connector PostgreSQL) و ۳ (API endpoints) تکمیل شدند؛ گام بعدی: import bridge (طبق طرح).
 
 ## بدهی فنی شناخته‌شده
 
