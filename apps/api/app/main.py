@@ -104,6 +104,13 @@ def on_startup():
                     USING (organization_id::text = current_setting('app.current_org_id', true))
                     WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
                 """,
+                # فاز ۲.۳ گام ۱: تعاریف KPI — همان پالیسی Fail-Closed org-scoped
+                "kpi_definitions": """
+                    CREATE POLICY tenant_isolation ON kpi_definitions
+                    FOR ALL
+                    USING (organization_id::text = current_setting('app.current_org_id', true))
+                    WITH CHECK (organization_id::text = current_setting('app.current_org_id', true));
+                """,
             }
             for table, policy_sql in rls_tables.items():
                 conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;"))

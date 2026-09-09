@@ -79,7 +79,16 @@
 - سند مرجع: **`docs/PHASE3_KPI_PLAN.md`** — طرح پیاده‌سازی بر پایه شواهد واقعی ریپو (commit پایه `18e445d`؛ ۹۵ تست سبز؛ head مایگریشن `0005_data_source_provenance`)
 - تصمیم‌های کلیدی مستندشده: مدل `KpiDefinition` (تعریف ساختاریافته بدون SQL — ۵ تجمیع، فیلتر allow-list، گروه‌بندی/سری روزانه/هفتگی/ماهانه)، موتور محاسباتی pure روی رکوردهای در-حافظه (بدون SQL، قابل تست unit بدون DB)، **compute-on-read بدون cache/snapshot** (ساده‌ترین گزینه درست با حجم fact محدود)، ۷ اندپوینت `/kpis` با ماتریس نقش (مدیریت manager+، مصرف analyst+، viewer هیچ)، RLS ENABLE+FORCE+Fail-Closed مطابق قرارداد، migration خطی `0006_kpi_definitions` از `0005`
 - توالی پیاده‌سازی در ۴ گام کوچک مستقل-آزمون‌پذیر با معیار پذیرش و نقطه توقف مشخص (§10)؛ non-goals صریح: AI/LLM، پیش‌بینی، ناهنجاری، arbitrary SQL، ETL، cache، موتورهای دیتابیس دیگر، بازطراحی fact_rows، داشبورد
-- وضعیت: **PLANNING / NOT STARTED** — هیچ کد، مدل، migration یا تستی برای فاز ۲.۳ وجود ندارد
+- وضعیت برنامه‌ریزی: **COMPLETE** — سند طرح نهایی و push شد (commit `20e72ae`)
+
+**فاز ۲.۳ — گام ۱: foundation تعریف KPI — تکمیل‌شده:**
+- مدل `KpiDefinition` (`app/models/kpi_definition.py`): دقیقاً یک `data_source_id` (FK CASCADE)، `aggregation` ∈ sum/avg/min/max/count، `filters` JSONB ساختاریافته (هرگز SQL — allow-list فیلد/op، سقف ۱۰)، `group_by`/`granularity` با قاعده «granularity اجباری iff group_by=date»، پنجره تاریخ inclusive، `enabled`، یونیک name per-org (`uq_kpi_org_name`)؛ بدون ستون SQL/cache/snapshot/comparison/derived (§9 طرح)
+- اعتبارسنجی تعریف: `validate_kpi_definition` + `KpiDefinitionError` در همان ماژول — قواعد تعریف فقط (هیچ محاسبه‌ای پیاده نشده)
+- migration `0006_kpi_definitions` روی `0005` (تک‌head، بدون create_all، parity کامل مدل/migration — شامل JSONB و دو ایندکس)
+- RLS runtime در `app/main.py`: ENABLE + FORCE + Fail-Closed org-scoped برای `kpi_definitions` (همان الگوی جداول دیگر)؛ role اپ همچنان NOSUPERUSER/NOBYPASSRLS
+- تست‌ها: ۱۳ unit (`test_kpi_definition_unit.py` روی SQLite: defaults، قواعد تعریف، سقف فیلترها، یونیک per-org، cascade منبع، round-trip فیلتر ساختاریافته، نبود فیلدهای ممنوع) + ۷ integration روی PostgreSQL واقعی (`test_kpi_rls_postgres.py`: ENABLE/FORCE/qual fail-closed/WITH CHECK، درج بدون context رد می‌شود، cross-org بلاک، cascade واقعی، schema ستون‌ها/ایندکس‌ها)
+- گیت: **۱۱۵ passed، 0 failed، 0 skipped** (۹۵ قبلی + ۲۰ جدید)؛ زنجیره روی دیتابیس خالی ۶/۶ تا `0006_kpi_definitions`، تک‌head، `alembic check` پاک قبل و بعد از تست‌ها
+- گام‌های بعدی فاز ۲.۳ (شروع نشده): گام ۲ موتور pure KPI، گام ۳ API، گام ۴ سری + گیت نهایی
 
 ## بدهی فنی شناخته‌شده
 
