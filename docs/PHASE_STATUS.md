@@ -90,6 +90,16 @@
 - گیت: **۱۱۵ passed، 0 failed، 0 skipped** (۹۵ قبلی + ۲۰ جدید)؛ زنجیره روی دیتابیس خالی ۶/۶ تا `0006_kpi_definitions`، تک‌head، `alembic check` پاک قبل و بعد از تست‌ها
 - گام‌های بعدی فاز ۲.۳ (شروع نشده): گام ۲ موتور pure KPI، گام ۳ API، گام ۴ سری + گیت نهایی
 
+**فاز ۲.۳ — گام ۲: موتور pure KPI — تکمیل‌شده:**
+- ماژول `app/services/kpi.py` — بدون هیچ SQL و دسترسی DB (تأیید با اسکن): ورودی مجموعه `FactRecord` در-حافظه + تعریف validated؛ حساب کاملاً Decimal (float عمداً پذیرفته نمی‌شود — حتی در adapter)، خروجی quantize به ۴ رقم با ROUND_HALF_UP مطابق Numeric(18,4)، نمای wire به‌صورت decimal-string
+- Adapter `FactRecord.from_fact_row` با نام فیلدهای واقعی fact_rows (measure_value/dimension_date/dimension_category/dimension_label) — بدون import مدل/DB؛ ورودی غیرقابل‌نگاشت (float/bool/رشته نامعتبر/تاریخ نامعتبر/شیء غیر-FactRecord) → `KpiComputationError` typed، هرگز نتیجه اشتباه خاموش
+- قرارداد §3.3 دقیق: empty → sum/count=0، avg/min/max=None، گروه‌ها=[]؛ measure=None دفاعی از همه تجمیع‌ها حذف؛ dimension NULL هرگز match فیلتر نمی‌شود و bucket نمی‌سازد
+- پنجره inclusive + فیلترهای ساختاریافته گام ۱ (AND؛ date-filter همان مکانیزم پنجره)؛ گروه‌بندی day/week/month با کلید ISO (هفته ISO دوشنبه‌شروع با iso-year درست در مرز سال)، category/label مرتب صعودی؛ فقط bucketهای مشاهده‌شده — بدون zero-fill؛ ترتیب ورودی DB اثری بر خروجی ندارد
+- اعتبارسنجی دفاعی تعریف قبل از محاسبه (§3.6) — همان قواعد گام ۱؛ engine database-agnostic و tenant-blind است (ایزولاسیون مسئول لایه بالادستی)
+- تست‌ها: ۳۵ unit بدون DB (`tests/test_kpi_engine_unit.py`) — پوشش هر ۲۰ محور درخواستی شامل مرز سال ISO (2027-01-01 → 2026-W53)، دقت 0.1×10=1.0000 بدون drift شناور، ROUND_HALF_UP، بی‌اثر بودن ترتیب ورودی
+- گیت: **۱۵۰ passed، 0 failed، 0 skipped** (۱۱۵ قبلی + ۳۵ جدید)؛ بدون migration جدید (گام ۲ هیچ تغییر schema ندارد)؛ Step 1 دست‌نخورده
+- گام‌های بعدی فاز ۲.۳ (شروع نشده): گام ۳ API، گام ۴ سری + گیت نهایی
+
 ## بدهی فنی شناخته‌شده
 
 - **مایگریشن دیتابیس:** تا فاز ۱ schema فقط با `create_all` ساخته می‌شد — از فاز ۲.۰ با Alembic مدیریت می‌شود (baseline: `0001_baseline`). تغییرات schema آینده فقط با migration جدید.
