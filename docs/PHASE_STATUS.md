@@ -41,13 +41,24 @@
 - RLS runtime در `app/main.py`: ENABLE + FORCE + Fail-Closed برای `database_connections` (همان الگوی فاز ۲.۱)
 - تست‌ها: ۹ تست unit جدید (`test_db_connection_unit.py`: round-trip/tamper/کلید اشتباه/الزام کلید در production/defaults/یونیک per-org/نبودِ plaintext پس از persist/فیلتر org/cascade) + گسترش پوشش integration (`test_data_sources.py`: RLS setup + assert ENABLE/FORCE/Fail-Closed/org-scoped برای جدول جدید + ایزولاسیون tenant ردیف اتصال)
 - گیت: **۳۲ passed، 0 failed، 0 skipped** روی PostgreSQL واقعی؛ `alembic upgrade head` روی دیتابیس خالی تا `0004`؛ `alembic current` = `0004_database_connections`؛ `alembic check` پاک (قبل و بعد از تست‌ها)
-- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): connector (فقط PostgreSQL)، API endpoints، import bridge — شروع نشده
+
+**فاز ۲.۲ — گام ۲: connector PostgreSQL — تکمیل‌شده:**
+- انتزاع `DatabaseConnector` (`app/connectors/base.py`): ABC با `test_connection` / `discover_tables` / `sample_rows` / `fetch_dataframe` + `ConnectorError`/`ConnectorTimeout`/`ConnectorReadOnlyViolation` sanitized + `ConnectionCheck`/`TableInfo` (بدون هیچ داده اعتبارنامه) + factory `get_connector` (فقط postgresql؛ سایر موتورها → ConnectorError)
+- پیاده‌سازی PostgreSQL (`app/connectors/postgres.py`) — مرز امنیتی:
+  - فقط SELECT/catalog؛ هیچ متدی متن SQL نمی‌پذیرد (arbitrary SQL وجود ندارد)
+  - شناسه جدول/schema فقط با `psycopg.sql.Identifier` — `table` فقط پس از تطبیق با خروجی `discover_tables` پذیرفته می‌شود (نام تزریق‌شده → «table not found»)
+  - نشست read-only (`default_transaction_read_only=on`) + `statement_timeout` + `connect_timeout`؛ بستن connection همیشه با rollback (هیچ commit ای)
+  - سقف ردیف: `MAX_SAMPLE_ROWS=1000` / `MAX_FETCH_ROWS=100000` — limit ورودی clamp می‌شود
+  - رمز فقط داخل `_connect` و فقط پس از RBAC+RLS decrypt می‌شود (kwargs-based، هیچ conninfo-string حاوی رمز ساخته نمی‌شود)؛ خطاها sanitized (بدون رمز/DSN/جزئیات درایور)
+- تست‌ها: ۹ تست unit (`test_connector_unit.py`: قرارداد ABC، clamping حدی، شناسه تزریق‌شده، credential non-disclosure، factory) + ۱۹ تست integration روی PostgreSQL واقعی (`test_connector_postgres.py`: اتصال موفق/رمز غلط sanitized/host غیرقابل‌دسترس و blackhole با connect_timeout محدود/discovery/sample/DataFrame/سقف ردیف/statement_timeout با قفل واقعی ACCESS EXCLUSIVE/خواندن-فقط در سطح session با INSERT رد شده/نبود plaintext در state و خطاها/RLS cross-org و fail-closed)
+- گیت: **۶۳ passed، 0 failed، 0 skipped** در یک session (۳۲ قبلی + ۱۹ connector + ۱۲ unit)؛ بدون migration جدید (گام ۲ هیچ تغییر schema لازم نداشت)؛ `alembic current` = `0004_database_connections`، تک‌head، `alembic check` پاک
+- باقی‌مانده فاز ۲.۲ (طبق `docs/PHASE2_PLAN.md`): API endpoints، import bridge — شروع نشده
 
 ## گام‌های بعدی
 
 فاز ۲ (بقیه): ۱) اتصال دیتابیس خارجی ۲) موتور KPI ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI)
 
-طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام ۱ فاز ۲.۲ (foundation) تکمیل شد؛ گام‌های بعدی: connector، API endpoints، import bridge (طبق طرح).
+طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — گام‌های ۱ (foundation) و ۲ (connector PostgreSQL) تکمیل شدند؛ گام‌های بعدی: API endpoints، import bridge (طبق طرح).
 
 ## بدهی فنی شناخته‌شده
 
