@@ -71,7 +71,7 @@
 
 ## گام‌های بعدی
 
-فاز ۲: ۱) اتصال دیتابیس خارجی — **تکمیل** ۲) موتور KPI — برنامه‌ریزی شد (`docs/PHASE3_KPI_PLAN.md`) ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI) — آینده
+فاز ۲: ۱) اتصال دیتابیس خارجی — **تکمیل** ۲) موتور KPI — **تکمیل** (`docs/PHASE3_KPI_PLAN.md`) ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI) — **برنامه‌ریزی شد** (`docs/PHASE4_CONTEXT_CATALOG_PLAN.md`)
 
 طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — هر ۴ گام (foundation، connector PostgreSQL، API endpoints، import bridge) تکمیل و گیت شدند؛ **فاز ۲.۲ کامل است.**
 
@@ -126,6 +126,13 @@
 - تست‌ها: ۱۴ integration روی PostgreSQL واقعی (`tests/test_kpi_series_api.py`) — ماتریس نقش‌ها (analyst/owner ✓، viewer 403، unauth 401/403)، cross-org 404، disabled 400، منبع pending → 400، گروه‌بندی day (۵ bucket صعودی)، week (ISO صحیح در مرز سال: 2026-W02..W06)، month (۲ bucket)، پنجره inclusive دوطرفه (هر دو مرز داخل)، فیلتر category اعمال‌شده، سری خالی → 200/[]، دقت Decimal (avg alpha → "14.0833")، ترتیب deterministic (دو فراخوانی یکسان)، عبور اجباری از موتور pure (spy)، هم‌زیستی compute (جمع bucketها == مقدار اسکالر)
 - گیت نهایی فاز ۲.۳: **۱۸۲ passed، 0 failed، 0 skipped** (۱۶۸ قبلی + ۱۴ جدید) در یک session؛ ماژول جدید rerun-clean
 - **همه دروازه‌های پذیرش §10 فاز ۲.۳ سبز شدند** — موتور pure + سری + API با RLS روی PostgreSQL واقعی؛ بدون cache/snapshot/AI/داشبورد؛ نقش اپ NOSUPERUSER+NOBYPASSRLS؛ زنجیره migration خطی تک‌head
+
+**فاز ۲.۴ — کاتالوگ زمینه — برنامه‌ریزی شد (شروع پیاده‌سازی نشده):**
+- سند مرجع: **`docs/PHASE4_CONTEXT_CATALOG_PLAN.md`** — طرح پیاده‌سازی بر پایه شواهد واقعی ریپو (commit پایه `a7a5ba4`؛ ۱۸۲ تست سبز؛ head مایگریشن `0006_kpi_definitions`)
+- هدف: لایه زمینه ساختاریافته/deterministic/tenant-scoped برای دستیار AI آینده — نه خود AI؛ پاسخ به «چه داده‌ای داریم، هر منبع چه معنایی دارد، چه KPIهایی تعریف شده‌اند، چه گروه‌بندی‌هایی ممکن است»
+- تصمیم‌های کلیدی مستندشده: **بدون جدول جدید و بدون migration** (همه متادیتای لازم از قبل در data_sources/data_source_columns/kpi_definitions/fact_rows/database_connections هست و تحت RLS است)؛ **محاسبه-on-read** (همان استدلال فاز ۲.۳ §3.7 — حجم محدود، invalidation غیرضروری)؛ Context Builder ی pure در `app/services/context_catalog.py` با قرارداد خروجی نسخه‌دار (`schema_version`) و سقف‌های صریح (`MAX_SOURCES=200`، `MAX_KPIS=200`، `MAX_COLUMNS_PER_SOURCE=200`، `MAX_DIMENSION_VALUES=50`) — بدون هیچ SQL خام؛ پوشش fact لایه به‌صورت تجمیع‌های bounded (تعداد ردیف، بازه تاریخ، واژه‌نامه ابعاد، last_mapped_at = max(created_at))؛ یک اندپوینت فقط-خواندنی `GET /context/catalog` با analyst+ (viewer ممنوع)؛ هیچ مقدار KPI محاسبه‌شده در کاتالوگ نیست — اعداد از اندپوینت‌های موجود compute/series می‌آیند؛ secrets اتصالات هرگز وارد payload نمی‌شوند (تست non-disclosure اجباری)
+- پیاده‌سازی در ۳ گام کوچک مستقل-آزمون‌پذیر (§12): builder+schemas+unit → API+integration → گیت نهایی؛ non-goals صریح: AI/LLM/embeddings/RAG، anomaly/forecasting/recommendations، dashboard، جدول/migration جدید، cache، arbitrary SQL، موتور دیتابیس دیگر، بازطراحی fact_rows
+- وضعیت برنامه‌ریزی: **PLANNING / NOT STARTED** — سند طرح آماده است؛ منتظر دستور پیاده‌سازی گام ۱
 
 ## بدهی فنی شناخته‌شده
 
