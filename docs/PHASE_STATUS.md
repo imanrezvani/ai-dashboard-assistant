@@ -161,6 +161,13 @@
 - گیت نهایی: **۲۰۵ passed، 0 failed، 0 skipped** در یک session روی PostgreSQL واقعی — دو بار اجرا شد (پیش و پس از checklist)؛ ۱۸۲ baseline بدون رگرسیون (+ ۲۳ تست فاز ۲.۴: ۱۴ unit + ۹ API)
 - **وضعیت نهایی: فاز ۲.۴ COMPLETE** — کاتالوگ زمینه (builder خالص + `GET /context/catalog`) آماده مصرف لایه AI آینده است؛ گام بعدی نقشه راه (فاز ۲.۵+ — لایه تصمیم AI) شروع نشده است
 
+**فاز ۲.۵ — لایه تصمیم AI — برنامه‌ریزی شد (شروع پیاده‌سازی نشده):**
+- سند مرجع: **`docs/PHASE5_AI_PLAN.md`** — طرح پیاده‌سازی بر پایه شواهد واقعی ریپو (commit پایه `c319241`؛ ۲۰۵ تست سبز؛ head مایگریشن `0006_kpi_definitions`)
+- هدف: پاسخ به «چه خبر است؟» و «کدام KPI تغییر کرده؟» — تشخیص تغییر deterministic (دو پنجره برابر مجاور، تغییر مطلق/نسبی، movers ابعاد از سری موجود) + بریفینگ سازمانی؛ LLM فقط **روایت‌گر** است و هرگز عدد محاسبه نمی‌کند؛ قاعده حاکم: «اعداد از کد، کلمات از مدل»
+- تصمیم‌های کلیدی مستندشده: موتور insight خالص بدون DB/SQL در `app/services/insights.py` (Decimal، بدون تقسیم بر صفر، بدون zero-fill، `MAX_MOVERS=5`، آستانه ±۲۵٪ به‌عنوان change detection — نه علم ناهنجاری)؛ انتزاع `LlmProvider` با قرارداد None-when-unconfigured (بدون کلید در dev → پاسخ deterministic با `narrative: null` — LLM هرگز روی مسیر عددی اثر ندارد)؛ **SambaNova** به‌عنوان ارائه‌دهنده پیاده‌سازی‌شده (OpenAI-compatible REST با httpx موجود — بدون SDK جدید؛ کلید `SAMBANOVA_API_KEY` با الگوی production fail-fast موجود)؛ قرارداد prompt نسخه‌دار و bounded (فقط insight packet JSON — هرگز credential/SQL/row خام/داده org دیگر؛ فایروال injection: داده‌های کاربر داخل JSON منتقل می‌شوند و خروجی schema-validated و طول‌سقف‌دار است)؛ **صفر جدول جدید و صفر migration** (compute-on-read — همان استدلال فازهای ۲.۳/۲.۴)؛ دو اندپوینت فقط-خواندنی analyst+ (`GET /kpis/{id}/insight` + `GET /assistant/briefing`)؛ تست‌ها هرگز LLM واقعی صدا نمی‌زنند (MockTransport + provider پایتونی stub)
+- پیاده‌سازی در ۴ گام کوچک مستقل-آزمون‌پذیر (§10): insight engine → provider → API → گیت نهایی؛ non-goals صریح: action خودکار/زمان‌بندی/alert، chat UI/حافظه مکالمه، NL-to-SQL (SQL دلخواه همچنان ممنوع کل ریپو)، علم ناهنجاری/پیش‌بینی/توصیه، embeddings/vector/RAG، fine-tuning/agent framework، rotation چند-provider، ماندگاری insight، داشبورد، جدول/migration جدید
+- وضعیت برنامه‌ریزی: **PLANNING / NOT STARTED** — سند طرح آماده است؛ منتظر دستور پیاده‌سازی گام ۱
+
 ## بدهی فنی شناخته‌شده
 
 - **مایگریشن دیتابیس:** تا فاز ۱ schema فقط با `create_all` ساخته می‌شد — از فاز ۲.۰ با Alembic مدیریت می‌شود (baseline: `0001_baseline`). تغییرات schema آینده فقط با migration جدید.
