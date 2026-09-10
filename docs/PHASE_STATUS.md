@@ -134,6 +134,16 @@
 - پیاده‌سازی در ۳ گام کوچک مستقل-آزمون‌پذیر (§12): builder+schemas+unit → API+integration → گیت نهایی؛ non-goals صریح: AI/LLM/embeddings/RAG، anomaly/forecasting/recommendations، dashboard، جدول/migration جدید، cache، arbitrary SQL، موتور دیتابیس دیگر، بازطراحی fact_rows
 - وضعیت برنامه‌ریزی: **PLANNING / NOT STARTED** — سند طرح آماده است؛ منتظر دستور پیاده‌سازی گام ۱
 
+**فاز ۲.۴ — گام ۱: builder خالص + اسکیماها — تکمیل‌شده:**
+- سرویس `app/services/context_catalog.py` — builder خواندن-محور deterministic و tenant-scoped: بدون جدول جدید و بدون migration (همه متادیتا از data_sources/data_source_columns/kpi_definitions/fact_rows زیر RLS خوانده می‌شود)؛ تنها ORM و تجمیع‌های func.min/max/count — **هیچ رشته SQL** در ماژول نیست؛ organization_id پارامتر keyword-only اجباری (fail-closed روی None) و هرگز از کلاینت نمی‌آید
+- پوشش fact لایه به‌صورت تجمیع‌های bounded per-source (§8): count، min/max(dimension_date)، last_mapped_at = max(created_at) (سیگنال رایگان freshness — map همیشه delete+re-insert است)، واژه‌نامه distinct ابعاد با LIMIT MAX_DIMENSION_VALUES+1 به‌عنوان sentinel + COUNT(DISTINCT) جداگانه تا true total حتی با truncate دقیق بماند؛ هیچ کوئری‌ای fact_rows را بدون هر دو فیلتر organization_id + data_source_id اسکن نمی‌کند
+- سقف‌های صریح (§8): MAX_SOURCES=200 / MAX_KPIS=200 / MAX_COLUMNS_PER_SOURCE=200 / MAX_DIMENSION_VALUES=50 — summary.data_source_count و summary.kpi_count همیشه true total (نه طول لیست‌های truncate)
+- determinism (§4 rule 1): منابع با uploaded_at desc + tiebreaker name asc (تقویت determinism — uploaded_at به‌تنهایی یکتا نیست؛ همین نکته در طرح اصلاح مستندسازی شد)، KPIها با created_at desc + name asc (دقیقاً ترتیب GET /kpis)، ستون‌ها با position، ابعاد صعودی مرتب‌شده در Python مستقل از ترتیب DB
+- اسکیماها `app/schemas/context_catalog.py` — پاکت نسخه‌دار (schema_version=1)، بدون هیچ float، بدون هیچ فیلد credential؛ از اتصال خارجی فقط database_connection_id (پاریته DataSourceOut)؛ **هیچ مقدار KPI محاسبه‌شده** در کاتالوگ نیست — اعداد از compute/series موجود می‌آیند
+- تست‌ها: ۱۴ unit بدون PostgreSQL (`tests/test_context_catalog_unit.py` روی SQLite در-حافظه، الگوی test_storage_unit.py) — org خالی، determinism ترتیب‌ها، پوشش صفر برای منبع unmapped، تجمیع‌ها + freshness دقیق، date_span سراسری، سقف ابعاد با true total، سقف KPI/منبع با truncate newest-first، بدون float در کل payload و بدون هیچ راز، تعریف KPI بدون فیلد محاسبه‌شده (value/buckets)
+- گیت: **۱۹۶ passed، 0 failed، 0 skipped** در یک session روی PostgreSQL واقعی (۱۸۲ baseline + ۱۴ جدید)؛ `alembic current` = `0006_kpi_definitions` تک‌head؛ `alembic check` پاک (گام ۱ صفر migration دارد — هر تغییر schema خطای گیت است)؛ role اپ همچنان NOSUPERUSER/NOBYPASSRLS؛ RLS دست‌نخورده (۷ جدول)
+- گام بعدی فاز ۲.۴ (شروع نشده): گام ۲ اندپوینت GET /context/catalog + تست‌های integration (ماتریس نقش، ایزولاسیون cross-org، determinism HTTP، non-disclosure با اتصال واقعی)؛ سپس گام ۳ گیت نهایی
+
 ## بدهی فنی شناخته‌شده
 
 - **مایگریشن دیتابیس:** تا فاز ۱ schema فقط با `create_all` ساخته می‌شد — از فاز ۲.۰ با Alembic مدیریت می‌شود (baseline: `0001_baseline`). تغییرات schema آینده فقط با migration جدید.
