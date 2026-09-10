@@ -10,7 +10,7 @@
   - اعتبارسنجی تعریف فقط از قواعد گام ۱ (validate_kpi_definition) — قاعده تکراری وجود ندارد
   - compute هیچ منطق تجمیع/فیلتر/گروه‌بندی ندارد — فقط رکوردهای tenant-scoped را
     به موتور pure گام ۲ می‌دهد (app/services/kpi.py)؛ engine database-agnostic می‌ماند
-  - فقط ۶ اندپوینت: create/list/get/patch/delete/compute — /series در گام ۴
+  - create/list/get/patch/delete/compute (گام ۳) + /series (گام ۴) — منطق سری فقط در موتور pure
 """
 
 import uuid
@@ -24,8 +24,8 @@ from app.models.data_source import DataSource
 from app.models.fact_row import FactRow
 from app.models.kpi_definition import KpiDefinition, KpiDefinitionError, validate_kpi_definition
 from app.models.user import User
-from app.schemas.kpi import KpiComputeOut, KpiCreate, KpiOut, KpiUpdate
-from app.services.kpi import FactRecord, KpiComputationError, compute_kpi
+from app.schemas.kpi import KpiComputeOut, KpiCreate, KpiOut, KpiSeriesOut, KpiUpdate
+from app.services.kpi import FactRecord, KpiComputationError, compute_kpi, compute_kpi_series
 
 router = APIRouter(prefix="/kpis", tags=["kpis"])
 
@@ -252,3 +252,49 @@ def compute_kpi_endpoint(
         raise HTTPException(status_code=422, detail=str(exc))
 
     return KpiComputeOut(kpi_id=kpi.id, value=str(result.value) if result.value is not None else None, rows=result.rows)
+
+
+@router.get("/{kpi_id}/series", response_model=KpiSeriesOut)
+def get_kpi_series(
+    kpi_id: uuid.UUID,
+    membership=Depends(require_role(ANALYST_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """سری/گروه‌بندی on-read (§3.5) — همان مرزهای compute؛ منطق گروه‌بندی/سری فقط در موتور pure.
+
+    - cross-org → 404 · disabled → 400 · منبع map نشده → 400 (همان سمانتیک compute)
+    - فکت‌ها فقط tenant-scoped (organization_id + data_source_id) — RLS + فیلتر صریح
+    - خروجی فقط bucketهای مشاهده‌شده، صعودی، decimal-string — بدون zero-fill (§9)
+    """
+    kpi = _get_own_kpi(db, kpi_id=kpi_id, organization_id=membership.organization_id)
+    if not kpi.enabled:
+        raise HTTPException(status_code=400, detail="این KPI غیرفعال است")
+    # منبع فقط از همان org + usable (status == mapped) — طرح §3.3: منبع map نشده → 400
+    _get_own_mapped_source(db, data_source_id=kpi.data_source_id, organization_id=membership.organization_id)
+
+    # tenant-scoped fact rows — همان الگوی compute؛ organization_id در WHERE (لایه ۳ دفاع کنار RLS)
+    rows = (
+        db.query(FactRow)
+        .filter(
+            FactRow.organization_id == membership.organization_id,
+            FactRow.data_source_id == kpi.data_source_id,
+        )
+        .all()
+    )
+    records = [FactRecord.from_fact_row(r) for r in rows]
+
+    try:
+        result = compute_kpi_series(records, kpi)  # موتور pure — هیچ DBی داخل آن نیست
+    except KpiDefinitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except KpiComputationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return KpiSeriesOut(
+        kpi_id=kpi.id,
+        group_by=result.group_by,
+        buckets=[
+            {"key": b.key, "value": str(b.value) if b.value is not None else None, "rows": b.rows}
+            for b in result.buckets
+        ],
+    )

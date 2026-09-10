@@ -115,6 +115,18 @@
 - گیت: **۱۶۸ passed، 0 failed، 0 skipped** (۱۵۰ قبلی + ۱۸ جدید) در یک session؛ ماژول جدید rerun-clean
 - گام بعدی فاز ۲.۳ (شروع نشده): گام ۴ سری + گیت نهایی
 
+**فاز ۲.۳ — گام ۴: سری KPI + گیت نهایی — تکمیل‌شده (فاز ۲.۳ کامل شد):**
+- `GET /kpis/{id}/series` (گام ۴) — seventh endpoint طرح §4؛ **analyst+**؛ viewer → 403؛ cross-org id → 404 (بدون افشای وجود)؛ KPI غیرفعال → 400؛ منبع map نشده → 400 (همان سمانتیک compute)
+- سری هیچ logic گروه‌بندی/تجمیعی در راستر ندارد — fetch تننت-scoped fact_rows (فیلتر organization_id + data_source_id کنار RLS) → `FactRecord.from_fact_row` → `compute_kpi_series` موتور pure گام ۲ (تست spy عبور اجباری از موتور را ثابت می‌کند)
+- شکل پاسخ دقیق §3.5: `{kpi_id, group_by, buckets:[{key, value, rows}]}` — key ISO-compatible (day/week-ISO/month)، فقط bucketهای مشاهده‌شده، مرتب‌سازی صعودی، **بدون zero-fill** (صفر-پُرکردن تقویم = نگرانی کلاینت، §9)
+- مقدارها decimal-string ۴رقم (قرارداد گام ۲ — هرگز float)؛ سری خالی → HTTP 200 با `buckets: []`
+- بدون مقایسه/رشد/پیش‌بینی — صرفاً سری تعریف‌شده
+- اسکیما: `KpiBucketOut` + `KpiSeriesOut` در `app/schemas/kpi.py` — value به‌صورت string، بدون float
+- بدون migration جدید (هیچ تغییر schema لازم نبود)؛ بدون تغییر 0006؛ `alembic current` = `0006_kpi_definitions` تک‌head، `alembic check` پاک
+- تست‌ها: ۱۴ integration روی PostgreSQL واقعی (`tests/test_kpi_series_api.py`) — ماتریس نقش‌ها (analyst/owner ✓، viewer 403، unauth 401/403)، cross-org 404، disabled 400، منبع pending → 400، گروه‌بندی day (۵ bucket صعودی)، week (ISO صحیح در مرز سال: 2026-W02..W06)، month (۲ bucket)، پنجره inclusive دوطرفه (هر دو مرز داخل)، فیلتر category اعمال‌شده، سری خالی → 200/[]، دقت Decimal (avg alpha → "14.0833")، ترتیب deterministic (دو فراخوانی یکسان)، عبور اجباری از موتور pure (spy)، هم‌زیستی compute (جمع bucketها == مقدار اسکالر)
+- گیت نهایی فاز ۲.۳: **۱۸۲ passed، 0 failed، 0 skipped** (۱۶۸ قبلی + ۱۴ جدید) در یک session؛ ماژول جدید rerun-clean
+- **همه دروازه‌های پذیرش §10 فاز ۲.۳ سبز شدند** — موتور pure + سری + API با RLS روی PostgreSQL واقعی؛ بدون cache/snapshot/AI/داشبورد؛ نقش اپ NOSUPERUSER+NOBYPASSRLS؛ زنجیره migration خطی تک‌head
+
 ## بدهی فنی شناخته‌شده
 
 - **مایگریشن دیتابیس:** تا فاز ۱ schema فقط با `create_all` ساخته می‌شد — از فاز ۲.۰ با Alembic مدیریت می‌شود (baseline: `0001_baseline`). تغییرات schema آینده فقط با migration جدید.

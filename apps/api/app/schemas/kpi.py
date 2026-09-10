@@ -81,3 +81,19 @@ class KpiComputeOut(BaseModel):
     kpi_id: uuid.UUID
     value: Optional[str] = None  # decimal-string (۴ رقم) — هرگز float
     rows: int
+
+
+class KpiBucketOut(BaseModel):
+    """یک bucket سری — شکل دقیق §3.5: key رشته ISO، value decimal-string یا null."""
+
+    key: str
+    value: Optional[str] = None  # decimal-string (۴ رقم) — هرگز float
+    rows: int
+
+
+class KpiSeriesOut(BaseModel):
+    """خروجی GET /kpis/{id}/series — فقط bucketهای مشاهده‌شده، مرتب‌سازی صعودی (بدون zero-fill)."""
+
+    kpi_id: uuid.UUID
+    group_by: str
+    buckets: list[KpiBucketOut] = []
