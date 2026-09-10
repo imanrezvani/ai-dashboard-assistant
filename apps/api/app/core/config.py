@@ -15,6 +15,36 @@ def _get_secret(name: str, dev_fallback: str) -> str:
 # fallback لوکال فقط برای dev — در production هرگز نباید استفاده شود
 _DEV_DATABASE_URL = "postgresql+psycopg://tasmim:tasmim_secret@localhost:5432/tasmim_yar"
 
+# فاز ۲.۵: مقدار fallback کلید LLM فقط برای dev — این sentinel در factory به‌عنوان
+# «پیکربندی‌نشده» تفسیر می‌شود (provider None → narrative: null)
+AI_API_KEY_DEV_FALLBACK = "dev-only-ai-key-do-not-use-in-prod"
+
+
+def _resolve_ai_api_key() -> str:
+    """کلید LLM narrator — ترتیب AI_API_KEY → SAMBANOVA_API_KEY (docs/PHASE5_AI_PLAN.md §7).
+
+    نبودِ کلید در production → RuntimeError هنگام load settings (همان الگوی
+    JWT_SECRET/ENCRYPTION_KEY)؛ در dev sentinel برمی‌گردد و factory آن را
+    «پیکربندی‌نشده» می‌داند — endpoints های deterministic با narrative: null کار می‌کنند.
+    """
+    is_production = os.getenv("ENV") == "production"
+    for name in ("AI_API_KEY", "SAMBANOVA_API_KEY"):
+        val = os.getenv(name)
+        if val:
+            return val
+    try:
+        from dotenv import dotenv_values  # python-dotenv از وابستگی‌های pydantic-settings
+        dotenv = dotenv_values(".env")
+        for name in ("AI_API_KEY", "SAMBANOVA_API_KEY"):
+            val = dotenv.get(name)
+            if val:
+                return val
+    except Exception:
+        pass
+    if is_production:
+        raise RuntimeError("SAMBANOVA_API_KEY (or AI_API_KEY) must be set in production")
+    return AI_API_KEY_DEV_FALLBACK
+
 
 def _dotenv_value(name: str) -> str | None:
     """خواندن مقدار از .env (همان semantics قبلی env_file='.env' pydantic) —
@@ -67,6 +97,11 @@ class Settings(BaseSettings):
     # فاز ۲.۲: رمزنگاری اعتبارنامه‌های اتصالات دیتابیس خارجی — در production الزامی
     # (برای تولید کلید: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     ENCRYPTION_KEY: str = _get_secret("ENCRYPTION_KEY", "dev-only-encryption-key-do-not-use-in-prod")
+    # فاز ۲.۵: LLM narrator — SambaNova (§7)؛ AI_API_KEY کلید است، سامباوا تنها provider پیاده‌شده
+    AI_PROVIDER: str = "sambanova"  # تنها مقدار پیاده‌شده در فاز ۲.۵
+    AI_MODEL: str = "Meta-Llama-3.3-70B-Instruct"
+    AI_BASE_URL: str = "https://api.sambanova.ai/v1"
+    AI_API_KEY: str = _resolve_ai_api_key()
 
     class Config:
         env_file = ".env"
