@@ -71,7 +71,7 @@
 
 ## گام‌های بعدی
 
-فاز ۲: ۱) اتصال دیتابیس خارجی — **تکمیل** ۲) موتور KPI — **تکمیل** (`docs/PHASE3_KPI_PLAN.md`) ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI) — **برنامه‌ریزی شد** (`docs/PHASE4_CONTEXT_CATALOG_PLAN.md`)
+فاز ۲: ۱) اتصال دیتابیس خارجی — **تکمیل** ۲) موتور KPI — **تکمیل** (`docs/PHASE3_KPI_PLAN.md`) ۳) کاتالوگ زمینه (آماده‌سازی دستیار AI) — **تکمیل** (`docs/PHASE4_CONTEXT_CATALOG_PLAN.md`)
 
 طرح تفصیلی و منبع حقیقت پیاده‌سازی فاز ۲.۲ (اتصال دیتابیس خارجی): **`docs/PHASE2_PLAN.md`** — هر ۴ گام (foundation، connector PostgreSQL، API endpoints، import bridge) تکمیل و گیت شدند؛ **فاز ۲.۲ کامل است.**
 
@@ -127,7 +127,7 @@
 - گیت نهایی فاز ۲.۳: **۱۸۲ passed، 0 failed، 0 skipped** (۱۶۸ قبلی + ۱۴ جدید) در یک session؛ ماژول جدید rerun-clean
 - **همه دروازه‌های پذیرش §10 فاز ۲.۳ سبز شدند** — موتور pure + سری + API با RLS روی PostgreSQL واقعی؛ بدون cache/snapshot/AI/داشبورد؛ نقش اپ NOSUPERUSER+NOBYPASSRLS؛ زنجیره migration خطی تک‌head
 
-**فاز ۲.۴ — کاتالوگ زمینه — برنامه‌ریزی شد (شروع پیاده‌سازی نشده):**
+**فاز ۲.۴ — کاتالوگ زمینه — کامل شد:**
 - سند مرجع: **`docs/PHASE4_CONTEXT_CATALOG_PLAN.md`** — طرح پیاده‌سازی بر پایه شواهد واقعی ریپو (commit پایه `a7a5ba4`؛ ۱۸۲ تست سبز؛ head مایگریشن `0006_kpi_definitions`)
 - هدف: لایه زمینه ساختاریافته/deterministic/tenant-scoped برای دستیار AI آینده — نه خود AI؛ پاسخ به «چه داده‌ای داریم، هر منبع چه معنایی دارد، چه KPIهایی تعریف شده‌اند، چه گروه‌بندی‌هایی ممکن است»
 - تصمیم‌های کلیدی مستندشده: **بدون جدول جدید و بدون migration** (همه متادیتای لازم از قبل در data_sources/data_source_columns/kpi_definitions/fact_rows/database_connections هست و تحت RLS است)؛ **محاسبه-on-read** (همان استدلال فاز ۲.۳ §3.7 — حجم محدود، invalidation غیرضروری)؛ Context Builder ی pure در `app/services/context_catalog.py` با قرارداد خروجی نسخه‌دار (`schema_version`) و سقف‌های صریح (`MAX_SOURCES=200`، `MAX_KPIS=200`، `MAX_COLUMNS_PER_SOURCE=200`، `MAX_DIMENSION_VALUES=50`) — بدون هیچ SQL خام؛ پوشش fact لایه به‌صورت تجمیع‌های bounded (تعداد ردیف، بازه تاریخ، واژه‌نامه ابعاد، last_mapped_at = max(created_at))؛ یک اندپوینت فقط-خواندنی `GET /context/catalog` با analyst+ (viewer ممنوع)؛ هیچ مقدار KPI محاسبه‌شده در کاتالوگ نیست — اعداد از اندپوینت‌های موجود compute/series می‌آیند؛ secrets اتصالات هرگز وارد payload نمی‌شوند (تست non-disclosure اجباری)
@@ -150,6 +150,16 @@
 - تست‌ها: ۹ integration روی PostgreSQL واقعی (`tests/test_context_catalog_api.py`، الگوی test_kpis_api.py — seed در fixture، override داخل fixture، cleanup فقط ردیف‌های خود ماژول با پیشوند ctx-api-/ctx-*-catalog): ماتریس نقش‌ها، org خالی، **ایزولاسیون tenant دوطرفه** (دو org با منابع/KPI هم‌نام — صفر نشت identifier در هر دو جهت حتی با هم‌نامی)، determinism HTTP (دو فراخوانی یکسان بجز generated_at)، پوشش end-to-end (mapped_role ستون‌ها، coverage با مقادیر دستی-محاسبه‌شده روی seed واقعی، provenance اتصال روی منبع mapped و import شده)، lifecycle (ساخت/حذف KPI از API → کاتالوگ به‌روز؛ حذف منبع → KPI/fact cascade و کاتالوگ به‌روز؛ حذف اتصال → SET NULL در کاتالوگ)، **non-disclosure با اتصال واقعی** (رمز encrypt شده در DB؛ host/username/dbname/password/ciphertext هرگز در payload نیست)؛ یک یافته تست: توکن دارای claim org_id به‌عنوان fallback سازمان معتبر است (رفتار established get_current_organization_id) — تست «بدون سازمان» با توکن بدون claim اصلاح شد
 - گیت: **۲۰۵ passed، 0 failed، 0 skipped** در یک session روی PostgreSQL واقعی (۱۹۶ قبلی + ۹ جدید)؛ بدون migration (گام ۲ هیچ تغییر schema ندارد)؛ `alembic current` = `0006_kpi_definitions` تک‌head؛ `alembic check` پاک؛ role اپ NOSUPERUSER/NOBYPASSRLS؛ RLS دست‌نخورده
 - گام بعدی فاز ۲.۴ (شروع نشده): گام ۳ گیت نهایی (checklist پذیرش §12 + علامت‌گذاری COMPLETE)
+
+**فاز ۲.۴ — گام ۳: گیت نهایی — تکمیل‌شده (فاز ۲.۴ کامل شد):**
+- checklist پذیرش §12 همگی سبز شد:
+  - **صفر migration در کل فاز ۲.۴** — `git diff` روی `alembic/` از کامیت برنامه‌ریزی خالی است؛ زنجیره بدون تغییر `0001 → 0006`؛ `alembic current` = `0006_kpi_definitions`؛ دقیقاً یک head؛ `alembic check` = «No new upgrade operations detected» **قبل و بعد از** اجرای نهایی تست‌ها
+  - **RLS زنده تأیید شد** (کوئری pg_class روی دیتابیس تست): هر ۷ جدول (memberships/data_sources/fact_rows/data_source_files/data_source_columns/database_connections/kpi_definitions) هم `relrowsecurity=t` (ENABLE) و هم `relforcerowsecurity=t` (FORCE)؛ صفر پالیسی حاوی `IS NULL` (fail-closed)؛ نقش اپ همچنان `rolsuper=f` + `rolbypassrls=f` (NOSUPERUSER/NOBYPASSRLS)
+  - **قرارداد پاکت §4 با تست اثبات شد**: schema_version نسخه‌دار، بدون float در کل payload، بدون هیچ فیلد credential (فقط provenance id)، بدون هیچ مقدار KPI محاسبه‌شده، determinism کامل بجز generated_at (۱۴ unit + ۹ integration)
+  - **non-disclosure با ردیف اتصال واقعی اثبات شد**: رمز encrypt شده در DB؛ host/username/database_name/password هرگز در پاسخ HTTP نیستند
+  - **اسکن ایستا**: هیچ رشته SQL در `app/services/context_catalog.py` (فقط ORM)؛ هیچ cache/snapshot/AI/LLM/forecast در کد یا `requirements.txt`؛ fact_rows و connector سطح دست‌نخورده
+- گیت نهایی: **۲۰۵ passed، 0 failed، 0 skipped** در یک session روی PostgreSQL واقعی — دو بار اجرا شد (پیش و پس از checklist)؛ ۱۸۲ baseline بدون رگرسیون (+ ۲۳ تست فاز ۲.۴: ۱۴ unit + ۹ API)
+- **وضعیت نهایی: فاز ۲.۴ COMPLETE** — کاتالوگ زمینه (builder خالص + `GET /context/catalog`) آماده مصرف لایه AI آینده است؛ گام بعدی نقشه راه (فاز ۲.۵+ — لایه تصمیم AI) شروع نشده است
 
 ## بدهی فنی شناخته‌شده
 
