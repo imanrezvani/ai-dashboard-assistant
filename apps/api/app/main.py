@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.migrations import run_startup_migrations
 from app.models import *  # noqa: F401,F403 - ثبت مدل‌ها روی Base.metadata (برای Alembic)
-from app.routers import auth, context_catalog, database_connections, data_sources, kpis, organizations
+from app.routers import assistant, auth, context_catalog, database_connections, data_sources, kpis, organizations
 
 app = FastAPI(title="تصمیم‌یار API", version="0.1.0")
 
@@ -26,6 +26,7 @@ app.include_router(data_sources.router)
 app.include_router(database_connections.router)  # فاز ۲.۲ گام ۳
 app.include_router(kpis.router)  # فاز ۲.۳ گام ۳
 app.include_router(context_catalog.router)  # فاز ۲.۴ گام ۲
+app.include_router(assistant.router)  # فاز ۲.۵ گام ۳
 
 
 @app.on_event("startup")

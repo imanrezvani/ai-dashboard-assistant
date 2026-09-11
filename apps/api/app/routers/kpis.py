@@ -11,9 +11,12 @@
   - compute هیچ منطق تجمیع/فیلتر/گروه‌بندی ندارد — فقط رکوردهای tenant-scoped را
     به موتور pure گام ۲ می‌دهد (app/services/kpi.py)؛ engine database-agnostic می‌ماند
   - create/list/get/patch/delete/compute (گام ۳) + /series (گام ۴) — منطق سری فقط در موتور pure
+  - /{id}/insight (فاز ۲.۵ گام ۳): clamp/اعتبارسنجی پنجره و روایت فقط در
+    app/services/insight_packets.py است — راستر فقط fetch tenant-scoped می‌کند
 """
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -24,7 +27,16 @@ from app.models.data_source import DataSource
 from app.models.fact_row import FactRow
 from app.models.kpi_definition import KpiDefinition, KpiDefinitionError, validate_kpi_definition
 from app.models.user import User
+from app.schemas.assistant import KpiInsightOut, MoverOut, NarrativeOut
 from app.schemas.kpi import KpiComputeOut, KpiCreate, KpiOut, KpiSeriesOut, KpiUpdate
+from app.services.insight_packets import (
+    WindowError,
+    build_packet_for_windows,
+    clamp_window_days,
+    effective_windows,
+    narrate_with_factory,
+    packet_from_packet,
+)
 from app.services.kpi import FactRecord, KpiComputationError, compute_kpi, compute_kpi_series
 
 router = APIRouter(prefix="/kpis", tags=["kpis"])
@@ -297,4 +309,64 @@ def get_kpi_series(
             {"key": b.key, "value": str(b.value) if b.value is not None else None, "rows": b.rows}
             for b in result.buckets
         ],
+    )
+
+
+# ---------- فاز ۲.۵ گام ۳: GET /kpis/{id}/insight ----------
+
+@router.get("/{kpi_id}/insight", response_model=KpiInsightOut)
+def get_kpi_insight(
+    kpi_id: uuid.UUID,
+    window_days: int | None = None,
+    membership=Depends(require_role(ANALYST_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """packet تغییر deterministic برای یک KPI (§3) — clamp/پنجره‌ها/روایت در insight_packets.
+
+    - analyst+ (viewer → 403) · cross-org → 404 · disabled → 400 · منبع pending → 400
+      (همان سمانتیک compute/series — بدون تکرار قاعده)
+    - clamp پنجره (۷..۳۶۵) و intersect پنجره تعریف KPI در سرویس گام ۳ است؛
+      پنجره نامعتبر → 422 (§8.3) — هیچ عددی از LLM نمی‌آید
+    - پنجره‌های محاسباتی با هم‌طول مجاور به تعریف اعمال می‌شوند؛ موتور pure گام ۱
+      مقایسه می‌کند؛ روایت حداکثر یک فراخوانی provider — خطایش هرگز 500 نمی‌شود
+    """
+    kpi = _get_own_kpi(db, kpi_id=kpi_id, organization_id=membership.organization_id)
+    if not kpi.enabled:
+        raise HTTPException(status_code=400, detail="این KPI غیرفعال است")
+    _get_own_mapped_source(db, data_source_id=kpi.data_source_id, organization_id=membership.organization_id)
+
+    # clamp پنجره درخواستی؛ پنجره‌های برابر مجاور با intersect پنجره تعریف KPI (§4 طرح)
+    n = clamp_window_days(window_days)
+    try:
+        wins = effective_windows(today=date.today(), window_days=n, start=kpi.date_from, end=kpi.date_to)
+    except WindowError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # تمام دسترسی DB + فراخوانی موتور pure در لایه گام ۳ — راستر فقط نگاشت خطا می‌کند
+    try:
+        packet = build_packet_for_windows(
+            db, kpi=kpi, organization_id=membership.organization_id, windows=wins
+        )
+    except KpiDefinitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except KpiComputationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    narrative, narrative_error = narrate_with_factory(packet_from_packet(packet))
+
+    return KpiInsightOut(
+        kpi_id=str(packet.kpi_id),
+        kpi_name=packet.kpi_name,
+        window_days=wins.window_days,
+        current_period={"from": wins.current[0].isoformat(), "to": wins.current[1].isoformat()},
+        previous_period={"from": wins.previous[0].isoformat(), "to": wins.previous[1].isoformat()},
+        current_value=packet.current_value,
+        previous_value=packet.previous_value,
+        change=packet.change,
+        change_pct=packet.change_pct,
+        direction=packet.direction,
+        flagged=packet.flagged,
+        top_movers=[MoverOut(**m.to_dict()) for m in packet.top_movers],
+        narrative=(NarrativeOut(summary=narrative.summary, highlights=narrative.highlights) if narrative else None),
+        narrative_error=narrative_error,
     )
